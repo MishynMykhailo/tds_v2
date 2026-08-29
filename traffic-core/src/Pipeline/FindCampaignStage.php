@@ -1,0 +1,62 @@
+<?php
+
+namespace TrafficCore\Pipeline;
+
+use TrafficCore\Db;
+
+/**
+ * Trimmed port of legacy `Traffic\Pipeline\Stage\FindCampaignStage`
+ * (application/Traffic/Pipeline/Stage/FindCampaignStage.php).
+ *
+ * Ported: resolve by an explicit `?campaign=<alias>` query param
+ * (legacy's `_tryToFindCampaign()` walks several alias sources — here
+ * only the direct query param is supported), and the domain-default
+ * fallback (legacy's `_findDomainDefaultCampaign()` via
+ * `CachedDomainRepository::getCampaignIdByUrl()` — here: `domains` table
+ * lookup by `Host` header).
+ *
+ * NOT ported (documented in docs/TRAFFIC_CORE_PLAN.md as deferred):
+ * `allow_by_id` numeric-id fallback, `ParameterRepository` custom alias
+ * keys, "any query param key is a possible alias" fallback, campaign
+ * caching (`CachedCampaignRepository`).
+ */
+class FindCampaignStage
+{
+    public function process(Payload $payload): Payload
+    {
+        $pdo = Db::instance();
+        $params = $payload->request->getQueryParams();
+
+        $campaign = null;
+
+        if (!empty($params['campaign'])) {
+            $stmt = $pdo->prepare("SELECT * FROM campaigns WHERE alias = ? AND state = 'active' LIMIT 1");
+            $stmt->execute([$params['campaign']]);
+            $campaign = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
+        }
+
+        if (!$campaign) {
+            $host = $payload->request->getHeaderLine('Host');
+            $host = explode(':', $host)[0];
+            if ($host !== '') {
+                $stmt = $pdo->prepare('SELECT default_campaign_id FROM domains WHERE name = ? LIMIT 1');
+                $stmt->execute([$host]);
+                $domain = $stmt->fetch(\PDO::FETCH_ASSOC);
+                if ($domain && $domain['default_campaign_id']) {
+                    $stmt = $pdo->prepare("SELECT * FROM campaigns WHERE id = ? AND state = 'active' LIMIT 1");
+                    $stmt->execute([$domain['default_campaign_id']]);
+                    $campaign = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
+                }
+            }
+        }
+
+        if (!$campaign) {
+            $payload->abort(404, 'Campaign not found');
+            return $payload;
+        }
+
+        $payload->campaign = $campaign;
+
+        return $payload;
+    }
+}

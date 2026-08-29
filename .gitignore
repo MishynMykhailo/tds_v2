@@ -1,0 +1,38 @@
+# Env / secrets
+backend/.env
+backend/.env.testing
+backend/.env.backup
+.env
+.env.*
+!*.env.example
+
+# PHP / Composer
+backend/vendor/
+traffic-core/vendor/
+
+# Laravel runtime
+backend/storage/*.key
+backend/storage/app/*
+!backend/storage/app/.gitignore
+backend/storage/framework/cache/*
+!backend/storage/framework/cache/.gitignore
+backend/storage/framework/sessions/*
+!backend/storage/framework/sessions/.gitignore
+backend/storage/framework/testing/*
+!backend/storage/framework/testing/.gitignore
+backend/storage/framework/views/*
+!backend/storage/framework/views/.gitignore
+backend/storage/logs/*
+!backend/storage/logs/.gitignore
+backend/bootstrap/cache/*.php
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# OS junk
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

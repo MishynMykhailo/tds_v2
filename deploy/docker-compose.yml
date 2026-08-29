@@ -1,0 +1,27 @@
+# Dev-only data services for tds_v2. The app itself (Laravel/Octane,
+# traffic-core) runs natively on the host during development — see
+# docs/ARCHITECTURE_PLAN.md for why (mirrors Keitaro's hybrid pattern).
+# This is a SEPARATE, fresh database from the old project's tds-mysql —
+# never point new code at production data during development.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tds2-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: tds2
+      MYSQL_USER: tds2
+      MYSQL_PASSWORD: secret
+    ports:
+      - "3307:3306"
+    volumes:
+      - tds2_mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    container_name: tds2-redis
+    ports:
+      - "6380:6379"
+
+volumes:
+  tds2_mysql_data:

@@ -1,0 +1,15 @@
+{
+    "name": "tds/traffic-core",
+    "description": "Lean PSR-7 click-processing core (non-Laravel, minimal reflection — see docs/ARCHITECTURE_PLAN.md and docs/TRAFFIC_CORE_PLAN.md). Talks to the same MySQL DB as backend/ via raw PDO, no ORM.",
+    "type": "project",
+    "require": {
+        "php": "^8.2",
+        "nyholm/psr7": "^1.8",
+        "nyholm/psr7-server": "^1.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "TrafficCore\\": "src/"
+        }
+    }
+}

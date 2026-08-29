@@ -1,0 +1,24 @@
+{
+    "name": "trafox/tds-contract-tests",
+    "description": "Independent contract test suite for the TDS backend API, runnable against any implementation (legacy or Laravel rewrite) via TDS_TEST_TARGET env var.",
+    "type": "project",
+    "license": "proprietary",
+    "minimum-stability": "stable",
+    "config": {
+        "platform": {
+            "php": "8.4.0"
+        },
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "require-dev": {
+        "pestphp/pest": "^2",
+        "guzzlehttp/guzzle": "^7"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    }
+}

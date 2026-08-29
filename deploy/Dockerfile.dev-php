@@ -1,0 +1,17 @@
+# Reusable dev image for tds_v2 backend work — avoids recompiling
+# pdo_mysql/pdo_sqlite from source (docker-php-ext-install) on every single
+# `docker run` during migrations/tests/artisan commands. Build once:
+#
+#   docker build -t tds2-php-dev -f deploy/Dockerfile.dev-php deploy/
+#
+# Then every command that used to be:
+#   docker run ... php:8.4-cli bash -c "apt-get update -qq && apt-get install -y -qq libsqlite3-dev >/dev/null 2>&1 && docker-php-ext-install ... && <cmd>"
+# becomes just:
+#   docker run ... tds2-php-dev <cmd>
+FROM php:8.4-cli
+
+RUN apt-get update -qq \
+    && apt-get install -y -qq libsqlite3-dev libzip-dev unzip >/dev/null \
+    && docker-php-ext-install -j"$(nproc)" pdo_mysql pdo_sqlite zip >/dev/null \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
