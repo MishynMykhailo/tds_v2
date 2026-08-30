@@ -710,5 +710,60 @@ SQL, удалены после) — referrer wildcard, IP CIDR /20 на невы
 (`country`) — fail-open с видимым заголовком; регрессия — стрим без
 фильтров не сломан.
 
+## traffic-core — Фаза 5 (15 из 18 оставшихся типов экшенов) — 2026-08-30
+
+Реализованы `blank_referrer`, `curl`, `do_nothing`, `formsubmit`, `frame`,
+`iframe`, `js`, `js_for_iframe`, `js_for_script`, `meta`, `remote`,
+`show_html`, `show_text`, `status404`, `sub_id` (`src/Pipeline/Actions/`,
+dispatch через `ExecuteActionStage::REGISTRY`). `campaign`/`double_meta`/
+`local_file` остаются 501 (каждый — по отдельной, уже задокументированной
+причине). Полная детализация в `docs/TRAFFIC_CORE_PLAN.md`, Фаза 5.
+
+**Главная находка — реальный баг легаси, LIVE-подтверждён против
+работающего приложения (`tds-app`, порт 8090), не только вычитан
+статически**: `AbstractAction::_executeInContext()` (и идентичная копия в
+back-compat `Component\StreamActions\AbstractAction`) — механизм
+переключения рендер-контекста по `frm`-параметру для 11 типов действий —
+сломан двумя способами: (1) `_executeDefault()` — мёртвый код,
+недостижим ни при каких условиях; live-тест подтвердил, что `frame`- и
+`js`-экшены отдают ПУСТОЕ тело на обычном клике без `frm`-параметра в
+реальном легаси; (2) ветки `frm=script`/`frm=frame` перепутаны местами —
+live-тест на `js`-экшене подтвердил, что `frm=frame` вызывает
+`_executeForScript()`, а `frm=script` вызывает `_executeForFrame()`.
+Воспроизведено для верификации через временную фикстуру в legacy dev-БД
+(`tds-mysql`, campaign alias `frmtest1`, stream `action_type=frame`/`js`),
+кеш легаси-приложения (`/app/cache` внутри `tds-app`, доктрина
+file-cache) пришлось сбросить вручную, чтобы подхватить новую кампанию —
+фикстура и кеш очищены после проверки.
+
+**Это ИСПРАВЛЕНО в порте, не воспроизведено** — иначе все 11 типов
+действий были бы одинаково "рабочими только для админки, но пустыми на
+реальном клике" и в traffic-core, что обессмысливало бы саму задачу этой
+Фазы. См. `AbstractAction.php`'s докблок в traffic-core для полного
+разбора и live-доказательств.
+
+Прочие находки, перенесены как есть (не исправлены, задокументированы в
+докблоках соответствующих классов): `Iframe::executeForFrame()` не всегда
+форсит 302 (зависит от `kversion`-параметра); `JsForScript::
+executeForFrame()` ставит `Content-Type: html/text` (похоже на опечатку
+вместо `text/html`); `FormSubmit` не экранирует значения `POST`-параметров
+в HTML (как и легаси).
+
+Общий пробел на все 15 (и дальше): `processMacros()`/`MacrosProcessor` не
+портирован нигде в traffic-core — payload/контент используется сырым.
+`AdsParser` тоже не портирован — `Meta`/`BlankReferrer`/`ShowHtml`
+поэтому не реализуют свой `_executeForScript()` (откат на честную
+заглушку "incompatible", а не битый вывод).
+
+Verification: Docker (`tds2-php-dev`, `deploy_default`, порт 8099),
+кампания `actiontest1` + один стрим в `tds2` dev-БД, `action_type`
+переключался `UPDATE` перед каждым тестом. Все 15 типов проверены живыми
+curl-запросами (включая GET vs POST для `formsubmit`, plain/jsonp для
+`sub_id`, обычный клик vs `frm=frame`/`frm=script` для `js`, реальный
+внешний HTTP-фетч через `https://httpbin.org` для `curl` и `remote` —
+включая проверку файлового кеша `remote` на диске второй попыткой).
+`php -l` чисто на всех новых файлах. Фикстуры (кампания/стрим) удалены
+из dev-БД после проверки.
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

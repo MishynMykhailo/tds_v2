@@ -326,10 +326,126 @@ IP `169.150.247.38`) — пропускает внутри диапазона, �
 тип) — fail-open, `X-Filters-Skipped: stream#N:country`; регрессия:
 стрим без фильтров по-прежнему проходит тривиально (не сломано Фазой 4).
 
+## Фаза 5 (15 из 18 оставшихся типов экшенов — реализовано в этом заходе)
+
+Реализованы реальные обработчики для 15 типов (`src/Pipeline/Actions/`,
+общий интерфейс `ActionHandler`, dispatch-таблица в
+`ExecuteActionStage::REGISTRY`): `blank_referrer`, `curl`, `do_nothing`,
+`formsubmit`, `frame`, `iframe`, `js`, `js_for_iframe`, `js_for_script`,
+`meta`, `remote`, `show_html`, `show_text`, `status404`, `sub_id`. `http`
+не тронут (Фаза 1, работает как раньше).
+
+**НАЙДЕН И ИСПРАВЛЕН реальный баг легаси, live-подтверждён** (не просто
+вычитан статически — curl-тест против ЖИВОГО легаси-приложения, `tds-app`,
+порт 8090, временная фикстура `campaign.alias='frmtest1'`, удалена после
+проверки): `AbstractAction::_executeInContext()` (application/Traffic/
+Actions/AbstractAction.php) — общий механизм переключения контекста
+рендеринга (`frm`-параметр, добавляется только code-preset'ами embed-
+интеграции, `Component/CampaignIntegration/data/code_presets.php`,
+`add_params => "frm=script"`/`"frm=frame"`, НИКОГДА обычным кликом по
+трекинг-ссылке) для 11 из типов действий (`blank_referrer`, `double_meta`,
+`frame`, `iframe`, `js`, `js_for_iframe`, `js_for_script`, `meta`,
+`remote`, `show_html`, `show_text`):
+
+1. `_executeDefault()` — мёртвый код: строка не может одновременно
+   начинаться и с `"script"`, и с `"frame"`, а именно это требуется, чтобы
+   ветка с `_executeDefault()` выполнилась. **Live-подтверждено**: `frame`-
+   и `js`-экшены на обычном клике (без `frm`) отдают ПУСТОЕ тело, статус
+   200, в реальном работающем легаси.
+2. Ветки `frm=script`/`frm=frame` перепутаны местами относительно имён
+   методов. **Live-подтверждено** на `js`-экшене: `frm=frame` вызывает
+   `_executeForScript()` (голая JS-функция без `<script>`-обёртки),
+   `frm=script` вызывает `_executeForFrame()` (обёрнутый в `<script>`
+   `top.location`-сниппет из `RedirectService::frameRedirect()`). Та же
+   логика 1-в-1 продублирована в `Component\StreamActions\AbstractAction`
+   (application/Traffic/BackCompatibility/classes/AbstractAction.php,
+   back-compat база для пользовательских кастомных экшенов) — это
+   устойчивое поведение приложения, не разовая опечатка.
+
+**Исправлено в порте** (не воспроизведено как баг): нет `frm*`-параметра →
+вызывается `executeDefault()` напрямую (именно то, что нужно обычному
+клику по трекинг-ссылке); `frm` есть и начинается с `"script"` →
+`executeForScript()`; иначе → `executeForFrame()` (без перестановки).
+Поскольку traffic-core пока нигде не генерирует `frm`-параметры сам (embed/
+JS-client флоу не портирован), доступна пока только первая ветка —
+исправление второй сделано на будущее, when JS-client-флоу когда-нибудь
+дойдёт очередь.
+
+**Общий, не повторяемый по каждому классу пробел**: `processMacros()`
+(`Traffic\Macros\MacrosProcessor`) нигде в traffic-core не портирован —
+`action_payload`/контент отдаются как есть, без подстановки макросов
+(`{sub_id_1}`, `{source_id}` и т.п.).
+
+**`AdsParser`** (application/Traffic/Actions/AdsParser.php, `_cid`-
+переписывание для async `<script>`-тегов) тоже не портирован — три класса
+(`Meta`, `BlankReferrer`, `ShowHtml`) поэтому НЕ переопределяют
+`executeForScript()`, честно откатываясь на общую заглушку
+"incompatible" вместо непарсенного, вероятно битого вывода.
+
+**Другие находки, перенесены как есть (не исправлены)**:
+- `Iframe::executeForFrame()` — легаси ставит заголовок `Location` через
+  `addHeader()` (НЕ `redirect()`) и форсит статус 302 только если есть
+  `kversion`-параметр `>= "3.4"` — иначе ответ остаётся 200 с
+  игнорируемым браузером `Location`-заголовком. Похоже на код для старого
+  JS-клиента, читающего заголовки вручную, а не на баг с точки зрения
+  этого пути (сам достижим только через `frm`, недостижим из обычного
+  клика).
+- `JsForScript::executeForFrame()` — `Content-Type: html/text` дословно
+  (похоже на опечатку вместо `text/html`), перенесено буквально.
+- `FormSubmit` — значения `getParsedBody()` подставляются в
+  `value="..."` без экранирования, как и в легаси (сам смысл экшена —
+  форвардить параметры как есть).
+
+**`remote`-экшен**: честный порт (сырой PHP `curl_*`, как в легаси, а не
+Guzzle из `Curl.php`/`CurlService`) — файловый кеш (`md5(url).link`, TTL
+60с) + `_appendParams()`-слияние query-параметров дословно. Кеш-директория
+— `CACHE_DIR` env (дефолт `<traffic-core>/var/cache`), не системный
+`/var/cache` легаси (у traffic-core нет общей с легаси cache-инфры).
+
+**`curl`-экшен**: честный порт `CurlService::request()`+`Curl::_execute()`
+— реальный HTTP-фетч (PHP curl, без Guzzle), UA/Referer форвардинг,
+base64 для image/pdf, `utf8ize()` дословно. Подтверждено чтением, что
+`CurlService::adaptAnchors()`/`addBasePath()`/`adaptResourcePaths()`/
+`adaptFormAction()` вызываются ТОЛЬКО из `Component\Landings\LocalFile\
+PageWrapper` (рантайм `local_file`-экшена, см. ниже), а не из
+`request()` — корректно не портированы для `curl`, это не пробел.
+
+**Осознанно НЕ включено в эту партию (из исходных "17 мелких")**:
+- **`double_meta`** — требует JWT/gateway-токен-флоу
+  (`GenerateTokenStage`/`LpTokenService`/`GatewayRedirectContext`),
+  отдельный уже отложенный кластер — портировать без него значило бы
+  поставить заведомо нерабочий two-step редирект.
+- **`local_file`** — требует `Component\Landings\LocalFile\PageWrapper`,
+  РАНТАЙМ-движок раздачи файлов лендинга (не тот же самый Editor/Cleaner
+  админский CRUD, что уже портирован) — включает выполнение PHP из
+  загруженных файлов лендинга, отдельная security-чувствительная
+  подсистема, заслуживающая отдельной сессии.
+
+Итого: 15 портировано в этой Фазе + `http` (Фаза 1) = 16 из 19
+реальных ключей репозитория (`campaign`/`group`-алиас, `double_meta`,
+`local_file` — всё ещё 501, с явной причиной каждого в докблоке
+`ExecuteActionStage`).
+
+**Verification** (Docker, `tds2-php-dev`, `deploy_default`, порт 8099,
+кампания `actiontest1` + один стрим, `action_type`/`action_payload`
+переключались `UPDATE` перед каждым тестом, фикстуры удалены после):
+все 15 типов — `do_nothing`/`status404`/`sub_id`(+jsonp)/`formsubmit`
+(GET vs POST body) проверены напрямую; `frame`/`iframe`/`js`/
+`js_for_iframe`/`js_for_script`/`meta`/`blank_referrer`/`show_html`/
+`show_text` — обычный клик (пусто в легаси → реальный контент в порте,
+это и есть фикс) плюс `js` дополнительно проверен на `frm=frame`/
+`frm=script` (корректно НЕ перепутаны, в отличие от легаси); `curl` —
+реальный фетч `https://httpbin.org/get`, тело/content-type совпали;
+`remote` — реальный фетч `https://httpbin.org/base64/...` (base64 URL),
+302 на раскодированный URL, второй запрос отдан из файлового кеша
+(`.link`-файл подтверждён на диске). `php -l` без ошибок на всех новых
+файлах.
+
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
-- **`remote`-экшен** (`Traffic\Actions\Predefined\Remote`) и остальные 16
-  типов экшенов кроме `http` — каждый мелкий, но их 17 штук.
+- **`double_meta`/`local_file`-экшены** — см. Фаза 5 выше для точных
+  причин (JWT/gateway-токен-флоу; отдельный security-чувствительный
+  рантайм-движок раздачи файлов лендинга соответственно).
 - **Визитор/уникальность** (`Component\Clicks\Model\Visitor`,
   `SaveUniquenessSessionStage`, `UpdateStreamUniquenessSessionStage`,
   `UpdateCampaignUniquenessSessionStage`, Redis-биндинг визиторов) —
