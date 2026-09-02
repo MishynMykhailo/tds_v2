@@ -671,17 +671,152 @@ raw-текст (PHP-теги не исполнены), как и предпис�
 соответствием легаси-движку исполнения (реальный `php-cgi`, не
 замена).**
 
+## traffic-core — Фаза 9 (GeoDb+визитор, токен-биндинг офферов) — 2026-09-02
+
+Два независимых куска сделаны параллельно (2 фоновых агента), сведены в
+единый пайплайн координатором одним заходом. Оба ранее были в списке
+"осознанно отложено" ниже.
+
+### GeoDb + визитор (реальный find-or-create вместо `random_int()`)
+
+Ключевая находка (уже была зафиксирована в `PORTING_LOG.md` ранее в эту
+сессию, здесь — реализована): гео/device/ISP-данные в легаси нормализованы
+на ОТДЕЛЬНУЮ таблицу `visitors`, не на `clicks`. Новая миграция
+`backend/database/migrations/2025_01_01_000029_...` (написана координатором
+до запуска агентов, чтобы избежать конфликта параллельных правок схемы) —
+`visitors` + 15 словарных `ref_*`-таблиц (`ref_ips`, `ref_user_agents`,
+`ref_countries`, `ref_regions`, `ref_cities`, `ref_device_types`,
+`ref_device_models`, `ref_languages`, `ref_browsers`,
+`ref_browser_versions`, `ref_os`, `ref_os_versions`,
+`ref_connection_types`, `ref_operators`, `ref_isp`) — идентичная легаси
+схема, подтверждено `DESCRIBE` на живой легаси-БД.
+
+Новое в traffic-core: `Pipeline\GeoDb\GeoDbResolver` (обёртка над
+`IP2Location\Database`, читает `var/geoip/IP2LOCATION-LITE-DB3.BIN` —
+единственный реально существующий geo-бинарник в проекте, не
+закоммичен в git из-за размера, см. `var/geoip/README.md`);
+`Pipeline\Device\DeviceInfoResolver` (обёртка над официальным
+`matomo/device-detector`, тем же, что использует легаси, с портированными
+правилами нормализации `_convertOs`/`_convertDeviceType`);
+`Pipeline\Visitor\DictionaryRepository` (общий find-or-create по `value`
+для любой `ref_*`-таблицы через `INSERT ... ON DUPLICATE KEY UPDATE id =
+LAST_INSERT_ID(id)`); `Pipeline\Visitor\VisitorResolver` (считает
+`visitor_code = hash('murmur3a', ip.ua.connection_type.country.city.
+device_model)`, буквальный порт легаси `VisitorService::generateCode()`,
+находит-или-создаёт визитора); новая стадия `Pipeline\ResolveVisitorStage`
+— вставлена в `public/index.php` сразу после `CaptureSignalStage`, до
+`FindCampaignStage`. `BuildRawClickStage` теперь пишет
+`$payload->visitorId` вместо `random_int()`.
+
+Зависимости: `ip2location/ip2location-php` (закреплён на `^8.2`, не
+последний `^9.x` — тот требует `bcmath`, которого нет в
+`tds2-php-dev`/не гарантирован и в легаси; версия 8.x — та же линия,
+что и вендоренная в легаси, ноль дополнительных требований, чисто на
+Packagist) и `matomo/device-detector` `^6.5`.
+
+Честно задокументированные отклонения: `region` хранит сырое название
+региона от IP2Location (`"California"`), не легаси-компактный код
+`"US_CA"` — тот требует 247 файлов реверс-словарей по странам
+(`application/Traffic/GeoDb/ip2location_reverse/*.php`), не портировано,
+не в скоупе. `isp_id`/`operator_id`/`connection_type_id` всегда `NULL` —
+LITE DB3 физически не содержит эти данные, других реальных
+geo-бинарников в проекте нет вообще (Maxmind/Sypex/ProIP/Tds — только
+код, без данных). IPv6/неразбираемые IP — `ref_ips` строка-сентинел `0`,
+клик не теряется.
+
+Verification: живой клик (реальный публичный IP хоста, Chrome UA) →
+`visitors`-строка с корректными `country=US`/`city=San Francisco`
+(живой IP2Location lookup, не синтетика) + `browser`/`os`/`device_type`
+резолвлены; повторный клик с ТЕМ ЖЕ IP+UA переиспользует ТОТ ЖЕ
+`visitor_id` (не создаёт новую строку) — критично для будущей
+уникальности в отчётах; клик с ДРУГИМ UA (тот же IP) создаёт ОТДЕЛЬНОГО
+визитора с верным `device_type=mobile`. Отдельно точечно проверен
+`GeoDbResolver` на `8.8.8.8` (→ US/California/Mountain View) и graceful
+null на приватных/невалидных IP. Фикстуры удалены.
+
+**Follow-up, не сделано намеренно (агент сообщил координатору, а не
+внёс сам — `CheckFilters.php`/`Filters/*` вне его скоупа)**: раз реальные
+гео-данные теперь есть, тип фильтра `country` в `FilterEngine` можно
+подключить по-настоящему вместо fail-open — отдельная небольшая задача
+на будущее.
+
+### Токен-биндинг офферов (`GenerateTokenStage` + Redis)
+
+Порт легаси `GenerateTokenStage`/`LpTokenService::storeRawClick()` —
+серверный lookup-токен: когда стрим выбирает оффер, клик сохраняется в
+Redis по сгенерированному токену с TTL, для будущего (ещё не
+портированного) постбек-колбэка. Не путать с уже сделанным JWT
+`double_meta` — не связанные механизмы, подтверждено чтением обоих
+классов.
+
+**Условие сработки, честно адаптировано, не добавлением нового флага**:
+легаси гейтит на `Payload::isTokenNeeded()`, выставляемый
+`ChooseOfferStage` безусловно при выборе оффера. Порт условится
+напрямую на `$payload->offerId !== null` — функционально идентично,
+без правки `ChooseOfferStage`/`ChooseLandingStage` (файлы были вне
+скоупа задачи, чтобы не пересекаться с параллельным GeoDb-агентом).
+
+**`shouldAddTokenToURL()` — проверено чтением, не угадано: недостижимо
+в смоделированном флоу.** `Payload::$_addTokenToUrl` в легаси по
+умолчанию `NULL`; `ClickDispatcher::dispatch()` (флоу, который
+моделирует traffic-core) никогда не вызывает `setAddTokenToUrl()` —
+единственный вызов во всём легаси находится в
+`ChooseLandingStage::_updatePayload()`, только на ветке "выбран
+лендинг, а не оффер напрямую". В traffic-core структурно то же самое:
+`ChooseOfferStage::process()` выходит рано, если `landingId !== null`
+— значит гейт `offerId !== null` этой стадии никогда не пересекается с
+веткой лендинга. Вывод: мутация URL (`_subid=`/`_token=` параметры) —
+задокументированный no-op в этом порте, не реализована, не пробел.
+
+Новое: `Redis\RedisClient` (синглтон-обёртка над `Predis\Client`, стиль
+1-в-1 как `TrafficCore\Db`, `REDIS_HOST`/`REDIS_PORT` env), `LpToken\
+LpTokenService` (`storeRawClick()`, TTL из `settings.lp_offer_token_ttl`
+— значение в МИНУТАХ, как и в легаси, default 1440 = 24ч), новая стадия
+`Pipeline\GenerateTokenStage` — вставлена в `public/index.php` после
+`BuildRawClickStage`, перед `ExecuteActionStage` (нужен уже собранный
+`$payload->rawClick`). Токен НЕ пишется в `$payload->rawClick` (это
+сломало бы позиционный/именованный INSERT в `StoreRawClickStage` —
+живьём подтверждено, что PDO бросает `SQLSTATE[HY093]: Invalid
+parameter number` на лишнем ключе массива) — хранится в новом
+`$payload->lookupToken` (пока ничем не потребляется, задел на будущее).
+
+Зависимость: `predis/predis` `^3.0` (чистый PHP Redis-клиент, без
+расширения — избегает пересборки образа).
+
+Verification: фикстура кампания→стрим(`schema=offers`)→оффер, TTL
+настройки временно = 2 мин → живой Redis-ключ `uuid_<subid>_...`
+существует, TTL близко к 120с; клик БЕЗ оффера (schema=NULL,
+action_type=http напрямую) → Redis остаётся пустым (негативный кейс
+явно проверен, не пропущен). Совместный тест с Фазой GeoDb (один клик,
+оба механизма разом) — `visitor_id` реальный, `offer_id` верный,
+Redis-ключ создан с корректным TTL — все три подтверждены одним
+запросом. Фикстуры удалены (БД + Redis).
+
+Итого Фазы 9: 2 из ~6 оставшихся крупных кластеров закрыты. Осталось:
+hit-limit/cost/payout в реальном времени, постбеки, альтернативные
+входные точки (`ClickApiContext`/`KClientJSContext`/etc.), периферийные
+стадии пайплайна (`DomainRedirectStage`/`CheckPrefetchStage`/etc.),
+`processMacros()`, асинхронная запись клика, FCGI/php-fpm пул для
+`local_file` (см. ниже — не критично, даже сам легаси-прод его не
+использует).
+
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
 - ~~`local_file`-экшен~~ — портирован Фазой 8 (см. выше). Все 19
   `action_type`-ключей теперь реализованы; ничего из этого списка не
   относится к экшенам самим по себе, только к периферийной инфраструктуре
   ниже.
-- **Визитор/уникальность** (`Component\Clicks\Model\Visitor`,
-  `SaveUniquenessSessionStage`, `UpdateStreamUniquenessSessionStage`,
-  `UpdateCampaignUniquenessSessionStage`, Redis-биндинг визиторов) —
-  сейчас `visitor_id` — случайное число, не реальный find-or-create.
-  Нужно для anti-fraud/уникальных кликов в отчётах.
+- ~~**Визитор find-or-create + GeoDb/device**~~ — портировано Фазой 9
+  (`ResolveVisitorStage`/`VisitorResolver`, реальный `visitors` +
+  словари, IP2Location LITE DB3, `matomo/device-detector`). Всё ещё НЕ
+  портировано из этого кластера: `SaveUniquenessSessionStage`/
+  `UpdateStreamUniquenessSessionStage`/`UpdateCampaignUniquenessSessionStage`
+  (уникальные клики per-stream/per-campaign/global для отчётов —
+  отдельная механика поверх уже реального `visitor_id`), Redis-биндинг
+  сущностей (`EntityBindingService` — sticky-выбор лендинга/оффера/
+  стрима для одного визитора, часть `SetCookieStage`, которая целиком
+  НЕ портирована — см. её докблок в легаси, там же uniqueness-cookie
+  логика).
 - **`BuildRawClickStage` — остальные 14 из 15 подшагов**: язык,
   referrer/se_referrer/keyword/search_engine, sub_id_1..15,
   extra_param_1..10, cost/currency, **GeoDb IP-резолвинг** (`source_id`/

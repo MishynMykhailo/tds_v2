@@ -20,19 +20,22 @@ namespace TrafficCore\Pipeline;
  * `PipelineRunner`'s docblock) from `payload->parentCampaignId`, set by
  * `PipelineRunner::prepareForCampaign()` on a `campaign`/`group` hop.
  *
- * NOT ported (see docs/TRAFFIC_CORE_PLAN.md): visitor resolution
- * (`Component\Clicks\Model\Visitor` — here a random id is generated,
- * legacy finds-or-creates a real Visitor row keyed by ip+useragent),
- * every GeoDb/device/bot/referrer/keyword/subid/extra-param field (all
- * left at column defaults — 0/NULL), IP/UA capture.
+ * Visitor resolution is now real (`ResolveVisitorStage`/`VisitorResolver`,
+ * runs earlier in the pipeline and populates `payload->visitorId`) —
+ * finds-or-creates a real `visitors` row keyed by ip+ua+geo/device, same
+ * as legacy's `Component\Clicks\Model\Visitor`. GeoDb (country/region/
+ * city via IP2Location LITE DB3) and device/browser/OS (via
+ * `matomo/device-detector`) are resolved as part of that same stage —
+ * see its own docblock. NOT ported: referrer/keyword/subid/extra-param
+ * fields (all left at column defaults — 0/NULL), bot detection, ISP/
+ * operator/connection_type (no real data source — LITE tier has none).
  */
 class BuildRawClickStage
 {
     public function process(Payload $payload): Payload
     {
         $payload->rawClick = [
-            // NOT a real visitor lookup — see docblock above.
-            'visitor_id' => random_int(1, PHP_INT_MAX),
+            'visitor_id' => $payload->visitorId,
             'sub_id' => bin2hex(random_bytes(16)),
             'datetime' => gmdate('Y-m-d H:i:s'),
             'campaign_id' => $payload->campaign['id'],

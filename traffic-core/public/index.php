@@ -53,11 +53,13 @@ use Nyholm\Psr7Server\ServerRequestCreator;
 use TrafficCore\Pipeline\Payload;
 use TrafficCore\Pipeline\PipelineRunner;
 use TrafficCore\Pipeline\CaptureSignalStage;
+use TrafficCore\Pipeline\ResolveVisitorStage;
 use TrafficCore\Pipeline\FindCampaignStage;
 use TrafficCore\Pipeline\ChooseStreamStage;
 use TrafficCore\Pipeline\ChooseLandingStage;
 use TrafficCore\Pipeline\ChooseOfferStage;
 use TrafficCore\Pipeline\BuildRawClickStage;
+use TrafficCore\Pipeline\GenerateTokenStage;
 use TrafficCore\Pipeline\ExecuteActionStage;
 use TrafficCore\Pipeline\CheckSendingToAnotherCampaign;
 use TrafficCore\Pipeline\StoreRawClickStage;
@@ -70,11 +72,13 @@ $payload = new Payload($request);
 
 $runner = new PipelineRunner([
     new CaptureSignalStage(),
+    new ResolveVisitorStage(),
     new FindCampaignStage(),
     new ChooseStreamStage(),
     new ChooseLandingStage(),
     new ChooseOfferStage(),
     new BuildRawClickStage(),
+    new GenerateTokenStage(),
     new ExecuteActionStage(),
     new CheckSendingToAnotherCampaign(),
     new StoreRawClickStage(),

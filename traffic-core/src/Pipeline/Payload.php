@@ -52,6 +52,24 @@ class Payload
     public array $headers = [];
     public string $body = '';
 
+    /**
+     * Real Visitor find-or-create result — see `ResolveVisitorStage`
+     * (GeoDb + device resolution, `VisitorResolver`). 0 means "not yet
+     * resolved"; `BuildRawClickStage` treats 0 as a bug, not a fallback.
+     */
+    public int $visitorId = 0;
+
+    /** @var array{geo?: array<string,mixed>, device?: array<string,mixed>} Populated by ResolveVisitorStage, for future filters/reporting. */
+    public array $geoDevice = [];
+
+    /**
+     * Redis lookup token for the offer-attribution flow — see
+     * `GenerateTokenStage`/`LpTokenService`. Null when no offer was
+     * chosen (nothing was stored). Purely informational for now; nothing
+     * downstream reads it yet.
+     */
+    public ?string $lookupToken = null;
+
     public function __construct(\Psr\Http\Message\ServerRequestInterface $request)
     {
         $this->request = $request;

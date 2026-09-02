@@ -6,7 +6,10 @@
         "php": "^8.2",
         "nyholm/psr7": "^1.8",
         "nyholm/psr7-server": "^1.1",
-        "firebase/php-jwt": "^7.1"
+        "firebase/php-jwt": "^7.1",
+        "ip2location/ip2location-php": "^8.2",
+        "matomo/device-detector": "^6.5",
+        "predis/predis": "^3.0"
     },
     "autoload": {
         "psr-4": {

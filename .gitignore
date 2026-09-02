@@ -10,6 +10,11 @@ backend/.env.backup
 backend/vendor/
 traffic-core/vendor/
 
+# GeoDb binary data — large (~48MB), environment-specific, not source.
+# See traffic-core/var/geoip/README.md for where to get it.
+traffic-core/var/geoip/*.BIN
+traffic-core/var/geoip/*.bin
+
 # Laravel runtime
 backend/storage/*.key
 backend/storage/app/*
