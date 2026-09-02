@@ -1041,6 +1041,81 @@ Redis, как резервный источник в легаси) сознат�
 в одной из трёх фаз — нет established инфраструктуры записи
 response-куки в traffic-core.
 
+## traffic-core — Фаза 14 (processMacros — реальная подстановка макросов) — 2026-09-02
+
+Реальная находка при чтении: легаси применяет `processMacros()` НЕ
+по одному разу в каждом из 15+ классов экшенов, а ЦЕНТРАЛЬНО — через
+универсальный аксессор `AbstractAction::getActionPayload()`
+(application/Traffic/Actions/AbstractAction.php:55 — `return
+$this->processMacros($this->getRawActionPayload());`), которым
+пользуются почти все экшены. Порт делает то же самое одним местом —
+`ExecuteActionStage::process()` подставляет макросы в
+`payload->actionPayload` ОДИН раз перед диспетчеризацией, а не в
+15 отдельных файлах — на деле оказалось не "трогает 15+ файлов", а
+"1 центральная точка + 3 точки для содержимого, которое не идёт через
+`actionPayload`" (`Curl.php` — тело реального HTTP-фетча, `LocalFile.php`
+— контент отданной страницы, `OutboundPostbackService` — исходящий
+S2S-URL, апгрейд с временной 5-строчной замены на реальный движок).
+
+**Осознанное исключение**: `campaign`/`group` НЕ подставляются —
+подтверждено чтением `ToCampaign::_execute()`, он читает
+`getRawActionPayload()` (сырой, БЕЗ макро-подстановки — это числовой id
+кампании, не контент), подстановка сломала бы `(int)`-каст в
+`CheckSendingToAnotherCampaign`, идущий следом.
+
+Архитектурное разделение (не урезание): движок подстановки
+(`TrafficCore\Macros\MacrosProcessor` — парсинг `{name:args}`/`{_name}`/
+`$name`/`$_name`, urlencode если не raw-режим) отделён от источника
+данных. `ClickMacroValues::forPayload()` строит карту макро-значений
+для клик-контекста (стрим/оффер/лендинг/GeoDb/device/rawClick),
+`OutboundPostbackService` строит свою — маленькую, конверсионную
+(`sub_id`/`status`/`tid`/`cost`/`revenue`/`profit`) — тем же движком.
+Легаси вместо этого держит ~30 отдельных классов-макросов в реестре;
+здесь один класс-строитель карты вместо 30 почти одинаковых классов
+(тот же паттерн упрощения, что и `FilterEngine` для типов фильтров).
+
+**Реальный, не гипотетический пробел, закрытый попутно**: чтобы
+`{sub_id_1}` разворачивался в РЕАЛЬНОЕ отправленное значение, а не в
+opaque словарный id, `BuildRawClickStage` теперь параллельно с
+`rawClick` (словарные FK для INSERT) заполняет новое
+`payload->clickFields` (сырые строки) — то же самое разделение
+"raw getter vs dictionary-resolving serialize()", что и в легаси
+`RawClick`.
+
+Портировано (реальные данные есть): `sub_id`/`subid`, `sub_id_1..15`,
+`extra_param_1..10`, `source`, `referrer`, `search_engine`, `keyword`,
+`ad_campaign_id`/`creative_id`/`external_id`, `x_requested_with`,
+`cost`/`revenue`/`profit`, `campaign_id`/`campaign_name`/`stream_id`/
+`landing_id`/`offer_id`/`parent_campaign_id` (+ `tds_`-алиасы),
+`country`/`region`/`city`/`device_type`/`device_model`/`browser(_version)`/
+`os(_version)` (из Фазы 9's GeoDb/device), `ip`/`user_agent`/`language`,
+`current_domain`, `date`, `random`, `token` (Redis lookup-токен из Фазы
+9), `currency` (настройка), `debug`.
+
+НЕ портировано, с причиной: языковые варианты `{country:ru}` и т.п. —
+аргумент принимается, но игнорируется (нет словарей перевода);
+`isp`/`operator`/`carrier`/`connection_type` — всегда `""` (нет данных,
+LITE-тариф); `is_bot`/`is_using_proxy` — всегда `"0"` (нет
+детекции); `visitor_code`/`destination` — не экспонированы на Payload
+ни одной стадией; `from_file`/`sample`/кастомные (admin-определённые
+через PHP-код) макросы — тот же класс риска, что `local_file`,
+сознательно вне скоупа; конверсионные макросы за пределами уже
+поддержанных 7 в постбеках (`original_status`/`conversion_time` и
+т.д.) — нет модели `Conversion`; `alwaysRaw()`-переопределение
+конкретных макросов — используй `{_name}`-префикс вручную для того же
+эффекта; `_addParamsFromCampaign()` — не нужен отдельно,
+`CheckParamAliasesStage` уже резолвит `campaigns.parameters`-алиасы в
+`payload->resolvedParams` раньше в пайплайне.
+
+Verification: живой клик с URL, содержащим `{sub_id}`/`{campaign_name}`/
+`{country}`/`$campaign_id`/`{source}` — все подставились верно
+(`country=US` — реальный GeoDb-лукап по публичному IP хоста, не
+синтетика); raw-режим (`{_campaign_name}`) сохранил пробелы буквально,
+обычный режим (`{campaign_name}`) заменил их на `+`; регрессия —
+`campaign`-экшен (рекурсия в другую кампанию) по-прежнему работает
+корректно, макро-подстановка не сломала `(int)`-каст числового id.
+Фикстуры (БД + Redis) удалены. `php -l` чисто.
+
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
 - ~~`local_file`-экшен~~ — портирован Фазой 8 (см. выше). Все 19
@@ -1081,6 +1156,10 @@ response-куки в traffic-core.
   Фазы 1, пересмотреть при реальной нагрузке.
 - ~~**Постбеки**~~ (`PostbackContext`/`PostbackDispatcher`) — портированы
   Фазой 11 (входящие + исходящие S2S).
+- ~~**`processMacros()`**~~ — портировано Фазой 14 (`MacrosProcessor`/
+  `ClickMacroValues`), реальная подстановка ~35 макросов. Оставшиеся
+  ~вне-скоупа: `from_file`/кастомные PHP-макросы (риск как у
+  `local_file`), языковой перевод country/region/city.
 - **`ClickApiContext`, `KtrkContext`, `KClientJSContext`, `RobotsContext`,
   `PingDomainContext`, `UpdateTokensContext`** — альтернативные входные
   точки, не тронуты вообще.

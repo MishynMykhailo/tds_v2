@@ -81,6 +81,22 @@ class Payload
      */
     public array $resolvedParams = [];
 
+    /**
+     * Raw (pre-dictionary-lookup) click field STRINGS — `sub_id_1`..`15`,
+     * `extra_param_1`..`10`, `source`, `referrer`, `keyword`,
+     * `search_engine`, `ad_campaign_id`, `x_requested_with`, `cost` —
+     * populated by `BuildRawClickStage` alongside `rawClick` (which holds
+     * the resolved `ref_*` dictionary FK ids instead, for the `clicks`
+     * INSERT). `MacrosProcessor` (Phase 14) reads from here: a macro like
+     * `{sub_id_1}` must expand to the actual submitted value, not an
+     * opaque dictionary integer — same distinction legacy's `RawClick`
+     * draws by keeping both raw getters (`getSubIdN()`) and a
+     * dictionary-resolving `serialize()`.
+     *
+     * @var array<string,string|null>
+     */
+    public array $clickFields = [];
+
     public function __construct(\Psr\Http\Message\ServerRequestInterface $request)
     {
         $this->request = $request;

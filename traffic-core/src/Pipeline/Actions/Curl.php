@@ -2,6 +2,8 @@
 
 namespace TrafficCore\Pipeline\Actions;
 
+use TrafficCore\Macros\ClickMacroValues;
+use TrafficCore\Macros\MacrosProcessor;
 use TrafficCore\Pipeline\Payload;
 
 /**
@@ -18,9 +20,10 @@ use TrafficCore\Pipeline\Payload;
  * forwarding, binary (image/pdf) responses base64-encoded, `utf8ize()`
  * (literal port of `Traffic\Tools\Tools::utf8ize()`) on text responses.
  *
- * NOT ported: `processMacros()` on the fetched body (MacrosProcessor isn't
- * ported anywhere in traffic-core — body is returned raw, unsubstituted);
- * `CurlService::adaptAnchors()`/`addBasePath()`/`adaptResourcePaths()`/
+ * Phase 14: `processMacros()` on the fetched body is now real (see
+ * `TrafficCore\Macros\MacrosProcessor`).
+ *
+ * NOT ported: `CurlService::adaptAnchors()`/`addBasePath()`/`adaptResourcePaths()`/
  * `adaptFormAction()` — confirmed by reading the real source that
  * `CurlService::request()` (what `Curl::_execute()` actually calls) never
  * calls any of those; they're only used by `Component\Landings\LocalFile\
@@ -84,6 +87,7 @@ class Curl implements ActionHandler
             $content = base64_encode($body);
         } else {
             $content = self::utf8ize($body);
+            $content = MacrosProcessor::process($content, ClickMacroValues::forPayload($payload));
         }
 
         $payload->body = $content;

@@ -1125,5 +1125,42 @@ Verification: кампания с `bind_visitors`, 2 стрима 50/50 — од
 
 **Кластер визитор/уникальность полностью закрыт** (Фазы 9, 12, 13).
 
+## traffic-core — Фаза 14 (processMacros — реальная подстановка) — 2026-09-02
+
+Реальная находка: легаси применяет макросы не по одному разу на 15+
+классов экшенов, а централизованно через `AbstractAction::
+getActionPayload()` (application/Traffic/Actions/AbstractAction.php:55).
+Порт делает то же самое — `ExecuteActionStage` подставляет один раз
+перед диспетчеризацией, плюс 3 отдельные точки для контента, который не
+идёт через `actionPayload` (`Curl.php` — тело фетча, `LocalFile.php` —
+контент страницы, `OutboundPostbackService` — S2S URL, апгрейд с
+временной 5-строчной замены).
+
+`campaign`/`group` осознанно исключены — `ToCampaign::_execute()`
+читает `getRawActionPayload()` (сырой, без подстановки), иначе сломался
+бы `(int)`-каст в `CheckSendingToAnotherCampaign`.
+
+Новое: `TrafficCore\Macros\MacrosProcessor` (движок парсинга/замены,
+источник данных не знает) + `ClickMacroValues` (строит карту для
+клик-контекста). Попутно закрыт реальный пробел: `BuildRawClickStage`
+теперь параллельно с `rawClick` (словарные FK) пишет
+`payload->clickFields` (сырые строки) — без этого `{sub_id_1}`
+разворачивался бы в opaque словарный id вместо реального значения.
+
+Портировано ~35 макросов с реальными данными (sub_id/extra_param×N,
+source/referrer/keyword/search_engine, cost/revenue/profit,
+campaign/stream/landing/offer id+name, GeoDb/device поля, ip/ua/language,
+date/random/token/currency/debug). НЕ портировано: языковой перевод
+country/region/city, isp/operator/connection_type (нет данных),
+is_bot/is_using_proxy (нет детекции), `from_file`/кастомные PHP-макросы
+(риск как у `local_file`), конверсионные макросы за пределами уже
+поддержанных 7 в постбеках.
+
+Verification: URL с `{sub_id}`/`{campaign_name}`/`{country}`/
+`$campaign_id`/`{source}` — все подставились верно (`country=US` —
+реальный живой GeoDb-лукап); raw-режим (`{_name}`) не urlencode'ит,
+обычный — encode'ит; регрессия — `campaign`-рекурсия по-прежнему
+работает (числовой id не пострадал). Фикстуры удалены. `php -l` чисто.
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

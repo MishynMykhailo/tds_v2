@@ -15,6 +15,8 @@ use TrafficCore\Pipeline\Actions\Js;
 use TrafficCore\Pipeline\Actions\JsForIframe;
 use TrafficCore\Pipeline\Actions\JsForScript;
 use TrafficCore\Pipeline\Actions\LocalFile;
+use TrafficCore\Macros\ClickMacroValues;
+use TrafficCore\Macros\MacrosProcessor;
 use TrafficCore\Pipeline\Actions\Meta;
 use TrafficCore\Pipeline\Actions\Remote;
 use TrafficCore\Pipeline\Actions\ShowHtml;
@@ -39,11 +41,24 @@ use TrafficCore\Pipeline\Actions\SubId;
  * `frame`, `iframe`, `js`, `js_for_iframe`, `js_for_script`, `meta`,
  * `remote`, `show_html`, `show_text`, `status404`, `sub_id`.
  *
- * A shared, project-wide gap across all of them: `processMacros()`
- * (`Traffic\Macros\MacrosProcessor`) is NOT ported anywhere in
- * traffic-core — every action payload/content is used raw, macros like
- * `{sub_id_1}`/`{source_id}` are not substituted. Documented once here,
- * not repeated in each class.
+ * Phase 14: `processMacros()` is now real (`TrafficCore\Macros\
+ * MacrosProcessor`/`ClickMacroValues`) — legacy applies it via a
+ * universal `AbstractAction::getActionPayload()` accessor (confirmed by
+ * reading `application/Traffic/Actions/AbstractAction.php:55` —
+ * `return $this->processMacros($this->getRawActionPayload());` — used by
+ * nearly every action's `getActionPayload()` call, not a per-class
+ * concern). Ported centrally here instead: `process()` substitutes
+ * macros into `payload->actionPayload` ONCE, before dispatch, covering
+ * every action type below that reads it. Skipped for `campaign`/`group`
+ * — confirmed by reading `Traffic\Actions\Predefined\ToCampaign::
+ * _execute()`, it calls `getRawActionPayload()` (the UN-substituted raw
+ * value, since it's a numeric campaign id, not content) — substituting
+ * macros there would risk corrupting the id `CheckSendingToAnotherCampaign`
+ * casts to int right after this stage. `Curl`/`LocalFile` additionally
+ * apply macros to their FETCHED/FILE content (not just `actionPayload`)
+ * — see their own docblocks, matching legacy's separate `processMacros()`
+ * calls on fetched bodies (`CurlService`) and rendered pages
+ * (`PageWrapper::_processMacros()`).
  *
  * `campaign`/`group` (`Traffic\Actions\Predefined\ToCampaign`) ported
  * separately — see `CampaignAction` (this stage's handler, a no-op
@@ -93,6 +108,14 @@ class ExecuteActionStage
             // Mirrors legacy: empty actionType -> leave response as-is
             // (legacy's own `do_nothing` action / no-stream fallback).
             return $payload;
+        }
+
+        if (!in_array($payload->actionType, ['campaign', 'group'], true) && $payload->actionPayload !== null) {
+            $payload->actionPayload = MacrosProcessor::process(
+                $payload->actionPayload,
+                ClickMacroValues::forPayload($payload),
+                $payload->signal['params'] ?? [],
+            );
         }
 
         if ($payload->actionType === 'http') {

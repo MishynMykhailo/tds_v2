@@ -90,13 +90,30 @@ class BuildRawClickStage
             'cost' => $get('cost') ?? 0,
         ];
 
+        $payload->clickFields = [
+            'sub_id' => $payload->rawClick['sub_id'],
+            'source' => $source,
+            'referrer' => $referrer,
+            'se_referrer' => $seReferrer,
+            'search_engine' => $searchEngine,
+            'keyword' => $keyword,
+            'x_requested_with' => $xRequestedWith,
+            'ad_campaign_id' => $get('ad_campaign_id'),
+            'creative_id' => $get('creative_id'),
+            'external_id' => $get('external_id'),
+            'cost' => $get('cost'),
+        ];
+
         for ($i = 1; $i <= 15; $i++) {
             $value = $get('sub_id_' . $i) ?? $get('subid' . $i);
             $payload->rawClick['sub_id_' . $i . '_id'] = $dict->findOrCreateByValue('ref_sub_ids', $value);
+            $payload->clickFields['sub_id_' . $i] = $value;
         }
 
         for ($i = 1; $i <= 10; $i++) {
-            $payload->rawClick['extra_param_' . $i] = $get('extra_param_' . $i);
+            $value = $get('extra_param_' . $i);
+            $payload->rawClick['extra_param_' . $i] = $value;
+            $payload->clickFields['extra_param_' . $i] = $value;
         }
 
         return $payload;

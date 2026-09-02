@@ -2,6 +2,8 @@
 
 namespace TrafficCore\Pipeline\Actions;
 
+use TrafficCore\Macros\ClickMacroValues;
+use TrafficCore\Macros\MacrosProcessor;
 use TrafficCore\Pipeline\Payload;
 
 /**
@@ -22,8 +24,9 @@ use TrafficCore\Pipeline\Payload;
  * `payload->actionOptions` is always populated by
  * `ChooseLandingStage`/`ChooseOfferStage` by the time this runs.
  *
- * `_processMacros()` NOT ported — same project-wide gap documented once
- * in `ExecuteActionStage`'s docblock, not repeated per class elsewhere.
+ * Phase 14: `_processMacros()` is now real, applied last (after the HTML
+ * -adapting chain, matching legacy's `PageWrapper::_adaptBody()` order:
+ * anchors -> base-path -> resource-paths -> form-action -> macros).
  * `addBasePath()` NOT ported — see `HtmlPathAdapter`'s docblock.
  */
 class LocalFile implements ActionHandler
@@ -88,6 +91,7 @@ class LocalFile implements ActionHandler
         $body = $adapter->adaptAnchors($body);
         $body = $adapter->adaptResourcePaths($body);
         $body = $adapter->adaptFormAction($body);
+        $body = MacrosProcessor::process($body, ClickMacroValues::forPayload($payload));
 
         $payload->body = $body;
     }

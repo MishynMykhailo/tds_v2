@@ -3,6 +3,7 @@
 namespace TrafficCore\Postback;
 
 use TrafficCore\Db;
+use TrafficCore\Macros\MacrosProcessor;
 
 /**
  * Port of legacy `Component\Postback\ProcessPostback\Stages\
@@ -25,18 +26,21 @@ use TrafficCore\Db;
  * convention for `statuses` so both sources of postback config are read
  * identically by `matchesStatus()`.
  *
- * URL macros: legacy pipes the postback URL through the full
- * `Traffic\Macros\MacrosProcessor` (project-wide unported gap — see
- * `TrafficCore\Pipeline\ExecuteActionStage`'s docblock for the same note
- * made once project-wide). Per task, only a minimal literal
- * `str_replace()` for the 5 macros confirmed as real, registered macro
- * names actually usable in postback URLs (`Traffic\Macros\MacroRepository
- * ::loadMacros()`, application/Traffic/Macros/MacroRepository.php:
- * `subid`/aliased as `sub_id`, `status`, `tid`, `cost`, `revenue` — all
- * `AbstractConversionMacro`s) is implemented: `{sub_id}`, `{status}`,
- * `{tid}`, `{cost}`, `{revenue}`. No other macro syntax (`$macro`,
- * `{macro:args}`, click-side macros, custom campaign parameters) is
- * substituted.
+ * URL macros: Phase 14 upgraded this from a literal 5-string
+ * `str_replace()` to the real `TrafficCore\Macros\MacrosProcessor`
+ * engine (same one `ExecuteActionStage` now uses for click-side content).
+ * The conversion-context macro set is still deliberately small — only
+ * the fields `PostbackResult` actually carries (`sub_id`/`status`/`tid`/
+ * `cost`/`revenue`/`profit`) — legacy's conversion macros
+ * (`Traffic\Macros\Predefined\{Tid,Status,OriginalStatus,ConversionTime,
+ * ConversionCost,ConversionRevenue,ConversionProfit}`) need a full
+ * `Conversion` model this project doesn't have; `original_status`/
+ * `conversion_time` aren't tracked on `PostbackResult` and are NOT
+ * substituted (left as literal, unmatched placeholder text, same as any
+ * unrecognized macro name). `{status:mapping}`'s custom status-name
+ * remapping argument (legacy's `Status::process($stream, $conversion,
+ * $mapping)`) is also NOT ported — `status` always resolves to the raw
+ * status string.
  *
  * HTTP send: legacy `_httpSend()` wraps Guzzle
  * (`Traffic\Http\Service\HttpService`) — this project has no HTTP client
@@ -54,9 +58,9 @@ use TrafficCore\Db;
  * explicitly ("wrap the whole outbound-send step in try/catch,
  * log-and-continue on failure").
  *
- * NOT ported: `Payload::getRawClick()`/`getStream()`/full
- * `SandboxContext` construction that legacy's `MacrosProcessor::process()`
- * needs for click-side/stream-side macros — moot here since only the 5
+ * NOT ported: click/stream-side macros (`country`/`device_type`/etc.) —
+ * this flow has no `Payload`/click available by the time a postback
+ * arrives, only the saved `PostbackResult` — moot here since only the 7
  * literal conversion macros above are supported.
  */
 class OutboundPostbackService
@@ -195,15 +199,15 @@ class OutboundPostbackService
 
     private function substituteMacros(string $url, PostbackResult $result): string
     {
-        $replacements = [
-            '{sub_id}' => (string) $result->subId,
-            '{status}' => $result->status,
-            '{tid}' => (string) $result->tid,
-            '{cost}' => (string) $result->cost,
-            '{revenue}' => (string) $result->revenue,
-        ];
-
-        return str_replace(array_keys($replacements), array_values($replacements), $url);
+        return MacrosProcessor::process($url, [
+            'sub_id' => $result->subId,
+            'subid' => $result->subId,
+            'status' => $result->status,
+            'tid' => $result->tid,
+            'cost' => (string) $result->cost,
+            'revenue' => (string) $result->revenue,
+            'profit' => (string) ($result->revenue - $result->cost),
+        ]);
     }
 
     private function resolveTimeout(): int
