@@ -1162,5 +1162,31 @@ Verification: URL с `{sub_id}`/`{campaign_name}`/`{country}`/
 обычный — encode'ит; регрессия — `campaign`-рекурсия по-прежнему
 работает (числовой id не пострадал). Фикстуры удалены. `php -l` чисто.
 
+## traffic-core — Фаза 15 (асинхронная запись клика) — 2026-09-02
+
+`StoreRawClickStage` теперь только `RPUSH`ит в Redis-очередь
+(`ClickQueue`, буквальный порт легаси `RedisStorage` — `RPUSH` +
+атомарный `LRANGE`+`LTRIM`-pipeline, `RANGE_SIZE`=1000). Реальный
+INSERT — в новом воркере `bin/process_click_queue.php` (порт
+`ProcessCommandQueue`+`AddClickCommand::process()`, сужен до одного
+типа команды). Группировка батча при разных наборах ключей — буквальный
+порт `Db::multiInsert()`'s алгоритма (не должно случаться в этом
+проекте, но не падает и не молча теряет колонки, если случится).
+
+Новый `traffic-core-worker` сервис в `deploy/docker-compose.yml`
+(profile `worker`, не в дефолтном `up`).
+
+Verification: 3 клика → очередь=3, `clicks`=0 (подтверждена реальная
+асинхронность); запуск воркера → батч-вставка всех 3, очередь=0; новый
+клик ПОКА воркер уже работает — подхвачен на следующем poll-цикле.
+Фикстуры удалены. `php -l` чисто.
+
+Также в эту сессию: `docs/MACROS.md` — полная таблица легаси-макросов
+vs. что реально портировано в `ClickMacroValues`/`OutboundPostbackService`
+(вскрыла несколько макросов, не упомянутых в докблоках Фазы 14:
+`ts_id`/`destination`/`device_brand`/`offer`/`traffic_source_name`/
+`visitor_code`/`keyword_cp1251`/`visitor_id` — все честно отмечены как
+не портированные).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

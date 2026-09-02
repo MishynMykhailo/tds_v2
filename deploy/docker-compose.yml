@@ -23,5 +23,34 @@ services:
     ports:
       - "6380:6379"
 
+  # Phase 15 — consumes the Redis-backed click queue `StoreRawClickStage`
+  # now RPUSHes onto instead of inserting into `clicks` synchronously.
+  # Built from `tds2-php-dev` (see Dockerfile.dev-php) so it shares the
+  # exact same PHP build/extensions as everything else in this project.
+  # Not started by default outside this compose file — bring it up
+  # explicitly with `docker compose --profile worker up` once
+  # `tds2-php-dev` has been built locally (`docker build -t tds2-php-dev
+  # -f deploy/Dockerfile.dev-php deploy/`).
+  traffic-core-worker:
+    image: tds2-php-dev:latest
+    container_name: tds2-traffic-core-worker
+    profiles: ["worker"]
+    working_dir: /app
+    volumes:
+      - ../traffic-core:/app
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_DATABASE: tds2
+      DB_USERNAME: tds2
+      DB_PASSWORD: secret
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    command: ["php", "bin/process_click_queue.php"]
+    depends_on:
+      - mysql
+      - redis
+    restart: unless-stopped
+
 volumes:
   tds2_mysql_data:

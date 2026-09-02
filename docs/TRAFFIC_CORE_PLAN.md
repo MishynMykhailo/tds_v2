@@ -1116,6 +1116,42 @@ Verification: живой клик с URL, содержащим `{sub_id}`/`{camp
 корректно, макро-подстановка не сломала `(int)`-каст числового id.
 Фикстуры (БД + Redis) удалены. `php -l` чисто.
 
+## traffic-core — Фаза 15 (асинхронная запись клика) — 2026-09-02
+
+`StoreRawClickStage` больше не пишет в `clicks` синхронно — теперь
+только `RPUSH` в Redis-очередь (`TrafficCore\Queue\ClickQueue`,
+буквальный порт легаси `Traffic\CommandQueue\QueueStorage\RedisStorage` —
+тот же `RPUSH`/атомарный `LRANGE`+`LTRIM`-pipeline вместо `LPOP` в
+цикле, тот же `RANGE_SIZE`=1000). Реальный INSERT переехал в отдельный
+воркер-процесс — `bin/process_click_queue.php`, порт легаси
+`ProcessCommandQueue`+`AddClickCommand::process()`, доведённый до
+одного типа команды (`add_click`) вместо универсального
+command-dispatch слоя (в traffic-core нет других отложенных команд).
+
+Группировка батча при вставке — буквальный порт алгоритма
+`Core\Db\Db::multiInsert()` (прочитан заново в этой сессии): если в
+одном попапнутом батче встречаются строки с РАЗНЫМ набором ключей
+(в этом проекте такого не бывает — `BuildRawClickStage` всегда
+производит одни и те же 35 полей, но легаси на это рассчитан), группа
+флашится одним multi-row INSERT и начинается новая — не падает и не
+молча теряет колонки.
+
+Новый сервис в `deploy/docker-compose.yml` — `traffic-core-worker`
+(profile `worker`, не запускается по умолчанию с обычным `docker
+compose up`) — `tds2-php-dev` образ, `php bin/process_click_queue.php`
+в вечном цикле (poll раз в секунду при пустой очереди). НЕ портировано:
+gzip-компрессия очереди, "дополнительная Redis-очередь"
+(multi-tenant-фича легаси), retry/dead-letter (упавший батч в порте
+просто логируется и теряется — как и у легаси для `add_click`
+конкретно, `CommandAggregator::flushAll()` без своего retry).
+
+Verification: 3 клика подряд → `LLEN click_queue`=3, `clicks`=0 строк
+(подтверждена реальная асинхронность, не мгновенная вставка); запуск
+воркера → лог "inserted 3 click(s)", очередь опустела, 3 строки
+появились в `clicks` с верными `campaign_id`/`stream_id`; клик, отправленный
+ПОКА воркер уже работает — подхвачен и вставлен на следующем
+poll-цикле без перезапуска воркера. Фикстуры удалены. `php -l` чисто.
+
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
 - ~~`local_file`-экшен~~ — портирован Фазой 8 (см. выше). Все 19
@@ -1150,10 +1186,9 @@ Verification: живой клик с URL, содержащим `{sub_id}`/`{camp
   находку выше), не от отсутствия кода.
 - ~~**`DomainRedirectStage`/`CheckPrefetchStage`/`CheckParamAliasesStage`/
   `CheckDefaultCampaignStage`**~~ — все 4 портированы Фазой 10.
-- **Асинхронная запись клика** — legacy кладёт клик в отложенную команду
-  (`Component\Clicks\DelayedCommand\AddClickCommand`) вместо синхронного
-  INSERT, ради пропускной способности. Здесь INSERT синхронный — ок для
-  Фазы 1, пересмотреть при реальной нагрузке.
+- ~~**Асинхронная запись клика**~~ — портировано Фазой 15
+  (`ClickQueue` + `bin/process_click_queue.php` + `traffic-core-worker`
+  compose-сервис).
 - ~~**Постбеки**~~ (`PostbackContext`/`PostbackDispatcher`) — портированы
   Фазой 11 (входящие + исходящие S2S).
 - ~~**`processMacros()`**~~ — портировано Фазой 14 (`MacrosProcessor`/
