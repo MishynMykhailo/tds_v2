@@ -15,3 +15,47 @@ RUN apt-get update -qq \
     && docker-php-ext-install -j"$(nproc)" pdo_mysql pdo_sqlite zip >/dev/null \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Adds a real `php-cgi` binary alongside the image's source-built `php`
+# (CLI SAPI) — needed for `traffic-core`'s `local_file` action to run
+# landing-page PHP through an actual CGI SAPI, matching the legacy
+# TDS app's own `Core\Sandbox\CgiExecutor` exactly (see
+# `traffic-core/docs` / `TRAFFIC_CORE_PLAN.md` Phase 8).
+#
+# Debian trixie's own `php8.4-cgi`/`php8.4-common` .deb packages exist in
+# the apt index but have no installable candidate in this image (their
+# `phpapi-*` dependency is satisfied only by Debian's OWN apt-built PHP,
+# which isn't installed here — this image's `php` is compiled from
+# source by the upstream docker-library scripts instead). Building
+# `php-cgi` from that SAME source tree (via `docker-php-source extract`,
+# already used above for ext installation) sidesteps the mismatch
+# entirely and guarantees the resulting `php-cgi` shares the exact same
+# Zend/TSRM ABI as this image's `php` — so the `pdo_mysql`/`pdo_sqlite`/
+# `zip` extensions enabled above for the CLI SAPI load into `php-cgi`
+# unchanged, no separate extension build needed.
+#
+# `--build=`/`--with-libdir=` intentionally omitted (unlike the original
+# `php -i`-reported build flags, which hardcode `aarch64-linux-gnu`) so
+# this stays portable across host architectures — autoconf detects the
+# build triple on its own.
+RUN apt-get update -qq \
+    && apt-get install -y -qq libxml2-dev libcurl4-openssl-dev libonig-dev libreadline-dev libsodium-dev libargon2-dev pkg-config re2c bison >/dev/null \
+    && docker-php-source extract \
+    && cd /usr/src/php \
+    && ./configure \
+        --sysconfdir=/usr/local/etc \
+        --with-config-file-path=/usr/local/etc/php \
+        --with-config-file-scan-dir=/usr/local/etc/php/conf.d \
+        --enable-option-checking=fatal \
+        --with-mhash --with-pic \
+        --enable-mbstring --enable-mysqlnd \
+        --with-password-argon2 --with-sodium=shared \
+        --with-pdo-sqlite=/usr --with-sqlite3=/usr \
+        --with-curl --with-iconv --with-openssl --with-readline --with-zlib \
+        --enable-cgi --disable-cli --disable-phpdbg \
+    && make -j"$(nproc)" cgi \
+    && cp sapi/cgi/php-cgi /usr/local/bin/php-cgi \
+    && cd / && docker-php-source delete \
+    && apt-get purge -y -qq pkg-config re2c bison >/dev/null \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*

@@ -2,32 +2,33 @@
 
 /**
  * Sandbox worker for the `local_file` action (see
- * `TrafficCore\Pipeline\Actions\LocalFileSandbox`) — loose port of legacy
- * `bin/execute_script.php` + `Core\Sandbox\Sandbox::execute()`/
- * `executeInChild()` (application/Core/Sandbox/Sandbox.php).
+ * `TrafficCore\Pipeline\Actions\LocalFileSandbox`) — literal port of
+ * legacy `bin/execute_script.php` (application/bin/execute_script.php),
+ * invoked exactly the same way: run under a real `php-cgi` SAPI process
+ * spawned via `proc_open`, with `SCRIPT_FILENAME` pointed at this file
+ * (`REDIRECT_STATUS`/`REQUEST_METHOD=POST`/`REMOTE_ADDR=127.127.127.127`
+ * env vars set by the parent, see `LocalFileSandbox::execute()` —
+ * matches `Core\Sandbox\Sandbox::execute()`'s `$env` array field for
+ * field). Request data (the real `$_SERVER`/`$_GET`/`$_POST`/`$_COOKIE`
+ * captured by traffic-core's own PSR-7 request, NOT whatever php-cgi
+ * derives from the placeholder env above) arrives as a single urlencoded
+ * `params` POST field containing JSON — same wire shape as legacy's
+ * `"params=" . urlencode(json_encode($params))`, JSON instead of
+ * legacy's PHP-`serialize()`+base64 for the payload only (legacy's OWN
+ * `_getExecParams()` already uses `json_encode`/`json_decode` for this
+ * exact field, not serialize — confirmed by reading it, so this isn't a
+ * format downgrade).
  *
- * Deliberate infrastructure substitution, not a fidelity cut: legacy
- * spawns `php-cgi` and talks the CGI protocol (headers, then a blank
- * line, then body) with this same script's job done by `bin/
- * execute_script.php` running UNDER that php-cgi process. Debian's
- * `php8.4-cgi` package couldn't be installed in this project's
- * `tds2-php-dev` image (unmet phpapi-* dependency against Debian's own
- * apt PHP stack, which isn't installed — the base `php:8.4-cli` image
- * compiles PHP from source instead) and building `php-cgi` from source
- * was judged not worth the build-time cost for this feature. Same
- * practical outcome via a different, simpler mechanism instead: this
- * script runs under the plain CLI SAPI (invoked by `LocalFileSandbox` via
- * `proc_open`, JSON on stdin/stdout instead of the CGI wire format);
- * `header()`/`http_response_code()` work identically under CLI SAPI and
- * are read back via `headers_list()`.
+ * `php-cgi` is a real binary in this project's `tds2-php-dev` image
+ * (built from the same PHP source tree as the image's `php` CLI SAPI —
+ * see `deploy/Dockerfile.dev-php`'s dedicated build step and comment for
+ * why Debian's own `php8.4-cgi` .deb couldn't be used instead) — full
+ * technical parity with legacy's execution engine, not a substitute.
  *
- * Never a public HTTP entry point — lives outside `public/`, only
- * reachable via direct CLI invocation from `LocalFileSandbox`. Legacy's
- * `execute_script.php` guards itself with a hardcoded
- * `REMOTE_ADDR === "127.127.127.127"` check specifically because it DOES
- * sit inside the CGI/webserver request path; that guard has no equivalent
- * concept here since this script is never bound to any port or router in
- * the first place.
+ * The `REMOTE_ADDR === "127.127.127.127"` gate IS meaningful here, same
+ * as legacy: this script's `SCRIPT_FILENAME` sits outside `public/`, but
+ * if a webserver config ever pointed at it directly this still refuses
+ * anything not carrying the parent process's own placeholder IP.
  *
  * Security hardening beyond legacy (documented, not a silent behavior
  * change): the calling process additionally sets `disable_functions` and
@@ -42,8 +43,16 @@
  * screens) — not new functionality.
  */
 
-$raw = stream_get_contents(STDIN);
-$params = json_decode($raw, true);
+if (($_SERVER['REMOTE_ADDR'] ?? null) !== '127.127.127.127') {
+    header('HTTP/1.1 403 Forbidden');
+    echo '403 Forbidden';
+    exit;
+}
+
+error_reporting(22517); // literal port of legacy's execute_script.php level
+
+parse_str((string) file_get_contents('php://input'), $result);
+$params = json_decode((string) ($result['params'] ?? ''), true);
 $params = is_array($params) ? $params : [];
 
 $_SERVER = is_array($params['server'] ?? null) ? $params['server'] : [];
@@ -60,23 +69,10 @@ $rawClick = is_array($params['rawClick'] ?? null) ? $params['rawClick'] : [];
 $filepath = (string) ($params['filepath'] ?? '');
 
 if ($filepath === '' || !is_file($filepath)) {
-    fwrite(STDOUT, json_encode(['status' => 500, 'headers' => [], 'body' => 'Internal error']));
-    exit(0);
+    header('HTTP/1.1 500 Internal Server Error');
+    echo 'Internal error';
+    exit;
 }
 
 chdir(dirname($filepath));
-
-http_response_code(200);
-ob_start();
-
-try {
-    include $filepath;
-} catch (\Throwable $e) {
-    fwrite(STDERR, $e->getMessage());
-}
-
-$body = (string) ob_get_clean();
-$status = http_response_code();
-$headers = headers_list();
-
-fwrite(STDOUT, json_encode(['status' => $status, 'headers' => $headers, 'body' => $body]));
+include $filepath;

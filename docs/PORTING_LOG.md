@@ -915,5 +915,35 @@ device/browser/os. Не начато в эту сессию — оценено �
 полноценная сессия, сопоставимая по объёму с уже сделанными фазами, не
 пристройка к уже сделанному. Ждёт явного решения пользователя начинать.
 
+## traffic-core — Фаза 8 update: реальный `php-cgi`, не замена — 2026-09-02
+
+По прямому запросу пользователя ("хочу полное тех-соответствие")
+пересобрано: `deploy/Dockerfile.dev-php` теперь собирает реальный
+`php-cgi`-бинарник из того же исходного дерева PHP, что и основной
+`php` CLI SAPI (`docker-php-source extract` + `./configure --enable-cgi
+--disable-cli --disable-phpdbg` + `make cgi`), кладёт его в
+`/usr/local/bin/php-cgi`. Debian trixie apt-путь (`php8.4-cgi`) остаётся
+недоступен по той же причине, что и раньше (не переисследовалось
+заново — уже подтверждено ранее), но это больше не имеет значения.
+
+`LocalFileSandbox`/`bin/execute_local_file.php` переписаны на настоящий
+CGI-протокол вместо временного JSON-обмена: `proc_open` с реальными CGI
+env-переменными (`REDIRECT_STATUS`/`SCRIPT_FILENAME`/`REQUEST_METHOD`/
+`REMOTE_ADDR`/`CONTENT_LENGTH`, тот же набор что и легаси
+`Sandbox::execute()`), урлкодированный `params=<json>` в stdin, сырой
+CGI-ответ парсится буквально как в легаси `_parseOutputToResponse()`.
+
+Две находки в процессе: (1) `proc_open()` с явным `$env` ПОЛНОСТЬЮ
+заменяет окружение процесса (Symfony Process у легаси — мержит) —
+пришлось явно смержить с `getenv()`; (2) `php-cgi` отказывается принимать
+`SCRIPT_FILENAME` с `..`-сегментами ("No input file specified.") — путь
+нормализуется `realpath()`.
+
+Полный набор из 6 живых тестов Фазы 8 (реальный PHP, plain-fallback,
+missing-index, traversal, timeout, disable_functions/open_basedir)
+повторён с реальным `php-cgi` — идентичный результат, плюс
+дополнительно подтверждено `pdo_mysql` доступен внутри песочницы (общий
+ABI с основным PHP). Фикстуры удалены после.
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
