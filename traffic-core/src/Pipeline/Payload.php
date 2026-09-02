@@ -41,6 +41,20 @@ class Payload
     public ?int $forcedCampaignId = null;
     public ?int $parentCampaignId = null;
 
+    /**
+     * Phase 17 — `LandingOfferDispatcher`'s re-entry fields (port of
+     * legacy `Payload::__construct()`'s `forced_stream_id`/
+     * `forced_offer_id` keys, application/Traffic/Pipeline/Payload.php).
+     * Consumed by `ChooseStreamStage`/`ChooseOfferStage` exactly like
+     * `forcedCampaignId` is consumed by `FindCampaignStage`: check, act,
+     * null it out. Used when a landing page requests its offer AFTER
+     * already being shown (the stream/offer were already decided on the
+     * FIRST click; this second pass must resolve the SAME ones, not roll
+     * new ones) — see `public/landing-offer.php`.
+     */
+    public ?int $forcedStreamId = null;
+    public ?int $forcedOfferId = null;
+
     /** @var array<string,mixed> Phase 4 — see Signal::fromRequest(). Populated by CaptureSignalStage. */
     public array $signal = [];
 
@@ -65,10 +79,21 @@ class Payload
     /**
      * Redis lookup token for the offer-attribution flow — see
      * `GenerateTokenStage`/`LpTokenService`. Null when no offer was
-     * chosen (nothing was stored). Purely informational for now; nothing
-     * downstream reads it yet.
+     * chosen and no landing needed one either (see `$needToken` below).
+     * Read by `public/ktrk.php`'s JS callback and `ClickApiResponseBuilder`'s
+     * `info` block.
      */
     public ?string $lookupToken = null;
+
+    /**
+     * Phase 17 — port of legacy `Payload::isTokenNeeded()`. Set by
+     * `ChooseLandingStage` when the chosen landing's STREAM has offers
+     * configured behind it (`stream_offer_associations` non-empty) —
+     * the trigger `public/landing-offer.php` depends on to later restore
+     * this click by token. See `ChooseLandingStage`'s own docblock for
+     * the exact legacy method this mirrors.
+     */
+    public bool $needToken = false;
 
     /**
      * Canonical-name overrides from `CheckParamAliasesStage` (e.g. a

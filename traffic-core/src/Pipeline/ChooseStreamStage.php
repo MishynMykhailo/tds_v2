@@ -24,6 +24,12 @@ use TrafficCore\Db;
  * Phase 13: sticky-stream binding is now real — see `StreamRotator`'s
  * own docblock, ported inside `chooseByWeight()` rather than here.
  *
+ * Phase 17: `payload->forcedStreamId` (set by `public/landing-offer.php`
+ * when re-resolving a click whose stream was already decided on the
+ * FIRST pass) short-circuits all three tiers — mirrors `FindCampaignStage`'s
+ * `forcedCampaignId` handling exactly (resolve by id directly, consume
+ * and null the field, skip rotation entirely).
+ *
  * NOT ported (see docs/TRAFFIC_CORE_PLAN.md): the `landings`/`offers`
  * schema branch (handled by separate `ChooseLandingStage`/
  * `ChooseOfferStage` stages since Phase 3, unrelated to this class).
@@ -37,6 +43,26 @@ class ChooseStreamStage
     public function process(Payload $payload): Payload
     {
         $pdo = Db::instance();
+
+        if ($payload->forcedStreamId !== null) {
+            $stmt = $pdo->prepare("SELECT * FROM streams WHERE id = ? AND state = 'active' LIMIT 1");
+            $stmt->execute([$payload->forcedStreamId]);
+            $stream = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
+            $payload->forcedStreamId = null;
+
+            if ($stream === null) {
+                return $payload;
+            }
+
+            $payload->stream = $stream;
+            if (!in_array($stream['schema'], ['landings', 'offers'], true)) {
+                $payload->actionType = $stream['action_type'];
+                $payload->actionPayload = $stream['action_payload'];
+            }
+
+            return $payload;
+        }
+
         $campaignId = $payload->campaign['id'];
         $campaignType = $payload->campaign['type'] ?? 'weight';
 

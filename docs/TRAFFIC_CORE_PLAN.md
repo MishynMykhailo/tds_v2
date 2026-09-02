@@ -1261,9 +1261,17 @@ Verification: (1) полный путь `LocalFile`-экшен → `LocalFileSan
   `ClickMacroValues`), реальная подстановка ~35 макросов. Оставшиеся
   ~вне-скоупа: `from_file`/кастомные PHP-макросы (риск как у
   `local_file`), языковой перевод country/region/city.
-- **`ClickApiContext`, `KtrkContext`, `KClientJSContext`, `RobotsContext`,
-  `PingDomainContext`, `UpdateTokensContext`** — альтернативные входные
-  точки, не тронуты вообще.
+- ~~**`ClickApiContext`, `KtrkContext`, `RobotsContext`,
+  `PingDomainContext`, `UpdateTokensContext`, `LandingOfferContext`**~~ —
+  портированы Фазой 17 (`public/click-api.php`/`ktrk.php`/`robots.php`/
+  `ping.php`/`update-tokens.php`/`landing-offer.php`). Живьём проверена
+  полная цепочка: клик через ClickApi по токену кампании → лендинг с
+  офером позади → `landing-offer.php` реально выбирает офер и обновляет
+  `clicks` через новую `ClickUpdateQueue`. `KClientJSContext` — НЕ
+  портирован, см. `docs/PORTING_LOG.md` Фаза 17: обе ветки
+  `KClientJSDispatcher` зависят от `CodeGenerator::generateClientCode()`,
+  которая читает файл по константе `CLIENT_LOCATION_DEFAULT = NULL` —
+  нефункционально уже в самом легаси-исходнике, портировать нечего.
 
 ---
 *Обновляется по ходу переноса, как `docs/PORTING_LOG.md` — дописывать, не переписывать.*

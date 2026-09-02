@@ -13,20 +13,18 @@ use TrafficCore\LpToken\LpTokenService;
  * up which click it belongs to. Unrelated to `double_meta`'s JWT — see
  * `TrafficCore\LpToken\LpTokenKey`'s docblock for that mechanism.
  *
- * **Condition ported**: legacy gates on `Payload::isTokenNeeded()`, a
- * flag set unconditionally by `ChooseOfferStage` the instant any offer is
- * chosen (`$payload->setNeedToken(true);` right after `$payload->
- * setOffer($offer);` — application/Traffic/Pipeline/Stage/
- * ChooseOfferStage.php) — plus a stream-has-offers re-check inside
- * `GenerateTokenStage` itself that is always true by construction once
- * `setNeedToken(true)` has already run down that same code path. This
- * traffic-core port has no `needToken` flag (not added — `ChooseOfferStage`/
- * `ChooseLandingStage` are off-limits for this change) and conditions
- * directly on `$payload->offerId !== null` instead, which is set by
- * traffic-core's own `ChooseOfferStage::process()` exactly when — and
- * only when — an offer was actually chosen (see that class: `$payload->
- * offerId = (int) $offer['id'];` right before it sets the action from the
- * offer). Functionally identical to legacy's gate for this flow.
+ * **Condition ported**: legacy gates on `Payload::isTokenNeeded()`, set
+ * unconditionally by `ChooseOfferStage` the instant any offer is chosen
+ * (`$payload->setNeedToken(true);` right after `$payload->setOffer($offer);`
+ * — application/Traffic/Pipeline/Stage/ChooseOfferStage.php), OR by
+ * `ChooseLandingStage` when the chosen landing's stream has offers behind
+ * it (see that class's own Phase 17 docblock addition). Originally (Phase
+ * 9) this stage conditioned only on `$payload->offerId !== null` — the
+ * `ChooseOfferStage` half of legacy's gate — because `Payload::$needToken`
+ * didn't exist here yet. Phase 17 added it (`public/landing-offer.php`
+ * needs a real token to restore a landing-shown click by), so this now
+ * checks both `offerId !== null` (direct offer path) and `$payload->
+ * needToken` (landing-with-offers-behind-it path) — the full legacy gate.
  *
  * **`shouldAddTokenToURL()` investigated, NOT ported — verified false in
  * the modeled flow, not guessed.** Legacy's `Payload::$_addTokenToUrl`
@@ -75,7 +73,7 @@ class GenerateTokenStage
 {
     public function process(Payload $payload): Payload
     {
-        if ($payload->offerId === null) {
+        if ($payload->offerId === null && !$payload->needToken) {
             return $payload;
         }
 

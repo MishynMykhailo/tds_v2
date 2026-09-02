@@ -74,6 +74,49 @@ class LpTokenService
         return $token;
     }
 
+    /**
+     * Phase 17 — restore side, used by `public/landing-offer.php` (port
+     * of legacy `LpTokenService::getRawClickByToken()`). The token IS the
+     * Redis key (see class docblock's key-namespacing deviation note), so
+     * this is a plain `GET` + `json_decode`. Returns null on a miss
+     * (expired TTL, or a token that was never real) — the caller falls
+     * back to `subIdFromToken()` + a `clicks` table lookup, same two-tier
+     * restore legacy's own `LandingOfferContext::_restoreRawClick()` does.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function getRawClickByToken(string $token): ?array
+    {
+        $encoded = RedisClient::instance()->get($token);
+        if ($encoded === false || $encoded === null) {
+            return null;
+        }
+
+        $decoded = json_decode((string) $encoded, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * Port of legacy `LpTokenService::subIdFromToken()`. Token format is
+     * `uuid_<subId>_<subId><uniqid-suffix>` (see `generateToken()` below
+     * — `uniqid($subId, true)` re-prefixes `$subId` a SECOND time into its
+     * own output, a legacy quirk that doesn't matter for extraction: the
+     * sub_id is exactly the first `_`-delimited segment after the
+     * `uuid_` prefix, since a real sub_id (`bin2hex(random_bytes(16))`,
+     * see `BuildRawClickStage`) never itself contains an underscore).
+     */
+    public function subIdFromToken(string $token): ?string
+    {
+        if (!str_starts_with($token, self::UUID_PREFIX)) {
+            return null;
+        }
+
+        $parts = explode('_', substr($token, strlen(self::UUID_PREFIX)), 2);
+
+        return $parts[0] !== '' ? $parts[0] : null;
+    }
+
     public function getTtlSeconds(): int
     {
         $ttl = (int) ($this->setting(self::TTL_SETTING_KEY) ?? (self::DEFAULT_TTL_SECONDS / 60)) * 60;

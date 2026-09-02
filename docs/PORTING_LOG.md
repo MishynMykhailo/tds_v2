@@ -1227,5 +1227,130 @@ Verification: полный путь `LocalFile`→`LocalFileSandbox`→`cgi-fcgi
 входные точки (отдельная многосессионная задача), Redis-биндинг
 сущностей уже закрыт Фазой 13.
 
+## traffic-core — Фаза 17 (альтернативные входные точки) — 2026-09-02
+
+Мелкие: `public/robots.php` (`domains.allow_indexing`, default=allow при
+отсутствии домена — как в легаси), `public/ping.php` (`TrafficCore\
+Domain\DomainService::getTrackerCode()`, формула как в легаси, но на
+`JWT_SALT` вместо легаси-SALT — те же основания, что у `LpTokenKey`),
+`public/update-tokens.php` (пост-фактум обновление клика по `sub_id` —
+`sub_id_N`/`extra_param_N`/`offer_id`/`is_bot`, требует `sub_id`, 400
+если пуст).
+
+Новая `TrafficCore\Queue\ClickUpdateQueue` (отдельный Redis-список
+`click_update_queue`, НЕ тот же список что `ClickQueue` — см. её
+докблок про порядок гарантий) + `bin/process_click_queue.php` теперь
+дренирует оба списка каждую итерацию. `sub_id_N` резолвится через тот
+же `ref_sub_ids`-словарь, что `BuildRawClickStage`; `extra_param_N` —
+голые строки. `sub_id` без совпадающей строки в `clicks` — лог + drop,
+без ретрая (тот же принцип, что `ClickQueue`).
+
+**ClickApi (`public/click-api.php`) — центральная вещь фазы.**
+Прогоняет ТОТ ЖЕ пайплайн, что обычный клик (переиспользованы все
+существующие стадии), просто не редиректит браузер, а возвращает JSON
+(`ClickApiResponseBuilder`, порт легаси `_forVersion2()`). Авторизация:
+`?token=<campaigns.token>` (прямо в `forcedCampaignId`, использует уже
+существующий механизм `FindCampaignStage`) ИЛИ `?api_key=` против
+`settings.api_key`. IP/UA/referrer можно переопределить явными
+параметрами (`ClickApiSignalStage`, заменяет `CaptureSignalStage` для
+этой точки входа — `payload->signal` оказался единственным источником
+истины для всех стадий, проверено grep'ом).
+
+**Найден и задокументирован реальный баг легаси, не гипотеза**:
+`ClickApiDispatcher::dispatch()`'s `switch` для версий 1 и 2 не имеет
+`return` после `break` — метод возвращает `null` для ОБЕИХ, включая
+дефолтную версию (`DEFAULT_VERSION=1`). Работает только `?v=3`, который
+требует непостроенного тут JWT/cookie-редиректа офера. Порт возвращает
+v2-JSON безусловно (единственная работающая форма) вместо повторения
+пустого ответа, на который никто не мог полагаться.
+
+`Ktrk` (`public/ktrk.php`) — обёртка `KTracking.response({sub_id,
+token});` вокруг того же пайплайна (без токен/api_key авторизации —
+только через домен/alias, как в легаси). `KtrkDispatcher extends
+ClickApiDispatcher` с хардкодной версией 2 в легаси — из-за того же
+missing-return бага КАЖДЫЙ вызов `/ktrk` там кидает необработанное
+исключение. Тоже задокументировано, не воспроизведено.
+
+**KClientJS НЕ портирован — реальная, проверенная находка, не
+решение "показалось сложным".** `KClientJSDispatcher`'s ОБЕ ветки
+(`_getCodeWithSubId`/`_getCodeWithOutSubId`) вызывают
+`CodeGenerator::generateClientCode()`, которая делает
+`file_get_contents(self::CLIENT_LOCATION_DEFAULT)`, а
+`CLIENT_LOCATION_DEFAULT = NULL` буквально в исходнике легаси. Портировать
+здесь нечего — сам легаси-эталон нефункционален как есть (или файл
+собирается отдельным billing-only build'ом, которого нет в переданном
+исходнике). Не выдумывал замену.
+
+**LandingOfferDispatcher (`public/landing-offer.php`)** — офер
+запрашивается ПОСЛЕ того, как лендинг уже показан. Восстановление
+клика по `_token` (`LpTokenService::getRawClickByToken()`, новый метод +
+`subIdFromToken()`) — Redis-первый, `clicks`-фоллбек. Требует
+`payload->forcedStreamId`/`forcedOfferId` (новые поля, добавлены в
+`ChooseStreamStage`/`ChooseOfferStage` — тот же паттерн, что
+`forcedCampaignId` в `FindCampaignStage`: резолвим по id, обнуляем
+поле, скип ротации).
+
+**Реальная находка по ходу тестирования, не с потолка**: пайплайн
+`GenerateTokenStage` до этой фазы генерировал токен ТОЛЬКО когда
+`ChooseOfferStage` реально выбирал офер (`payload->offerId !== null`) —
+т.е. НИКОГДА для лендинг-стрима (там офер решается позже,
+отдельно, самим `landing-offer.php`). Получалось: `LandingOfferDispatcher`
+был построен, но токен, по которому он восстанавливает клик, было
+физически неоткуда взять. Закрыл, портировав легаси-триггер, который
+раньше был явно отмечен как "NOT ported" в докблоке `ChooseLandingStage`:
+`ChooseLandingStage` теперь ставит `payload->needToken=true`, когда у
+выбранного лендинга стрим содержит `stream_offer_associations`.
+`GenerateTokenStage`'s условие расширено на `offerId !== null ||
+needToken`.
+
+Второй найденный вживую баг (не гипотеза, поймано первым же тестовым
+прогоном): нельзя было просто выставлять `payload->landingId` из
+восстановленного клика перед прогоном второго пайплайна —
+`ChooseOfferStage`'s guard `if ($payload->landingId !== null) return`
+существует, чтобы скипать выбор офера, когда `ChooseLandingStage`
+ТОЛЬКО ЧТО выбрал лендинг В ЭТОМ ЖЕ прогоне — а не как "у клика
+исторически есть лендинг". Раз `landing-offer.php` не гоняет
+`ChooseLandingStage` вообще, `landingId` там оставлен `null`
+намеренно — иначе офер никогда бы не выбирался. Задокументированный
+побочный эффект: макросы `{landing_id}`/`{tds_landing_id}` в
+`action_payload` офера тут не резолвятся (пусто), поскольку `BuildRawClickStage`
+(единственный источник `payload->clickFields`) в этом втором проходе
+не запускается вовсе.
+
+`StoreRawClicksStage`-эквивалент НЕ вызывается в этом проходе
+(создал бы дубликат строки с тем же `sub_id`, `ClickQueue` — чисто
+INSERT-очередь, упал бы весь батч на UNIQUE-констрейнте) — вместо
+этого явный push в `ClickUpdateQueue` (`offer_id`,
+`affiliate_network_id` резолвится воркером из `offers`,
+`landing_clicked`/`landing_clicked_datetime`, плюс
+`sub_id_N`/`extra_param_N` из текущего запроса) — порт легаси
+`UpdateClickCommand::saveLpClick()`.
+
+Verification (полная цепочка, живьём): `click-api.php` по токену
+кампании → создал клик с лендинг-стримом (стрим имеет офер позади) →
+подтверждено появление `lookupToken` в JSON (раньше — не было);
+`landing-offer.php` по этому токену → офер реально выбран
+(`LandingOfferRotator`), `{sub_id}`-макрос в `action_payload` офера
+подставился реальным значением, `clicks.offer_id`/`landing_clicked`
+обновлены воркером через `ClickUpdateQueue`. Ошибочные токены: не
+`uuid_`-префикс → 441, пустой → 400, синтаксически верный но
+несуществующий → 422 — все проверены curl'ом. `update-tokens.php`
+проверен на реальном `sub_id`: `extra_param_1`/новый `sub_id_2`
+(через `ref_sub_ids`) реально обновились в `clicks`. `robots.php`/
+`ping.php` проверены. Все контейнеры и фикстуры (кампания, стримы,
+лендинг, офер, ассоциации, `settings.api_key`, клики) удалены после
+теста. `php -l` чисто на всех новых/изменённых файлах.
+
+Не портировано (см. докблоки, не тихие пропуски): `language`/
+`search_engine`/`landing_id`/`datetime`/`always_empty_cookies`
+оверрайды в ClickApi; cookie-фоллбек токена в `landing-offer.php`;
+`hasClickApiFeature()` PRO-лицензионный гейт (в проекте нет системы
+лицензий вообще, не новое решение).
+
+Осталось из крупного по алгоритму трафика: ничего не идентифицировано
+дальше — все входные точки из `application/Traffic/Context/*` и
+`Dispatcher/*` разобраны (см. список в начале Фазы 17 в истории сессии).
+Дальше — фронтенд (осознанно отложен).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

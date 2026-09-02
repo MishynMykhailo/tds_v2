@@ -35,12 +35,19 @@ use TrafficCore\Uniqueness\EntityBindingService;
  * Phase 13: sticky-offer binding is now real — see
  * `LandingOfferRotator`'s own docblock.
  *
- * NOT ported: `forcedOfferId` (query-param override + the
- * `IGNORE_OFFER_PARAM="exit"` param-skip), `ConversionCapacityService::
- * findAvailableOffer()` (daily-cap alternate-offer chain — `offers.
- * conversion_cap_enabled`/`daily_cap` columns exist in `backend/` but no
- * runtime check reads them yet), `needToken` itself (no token flow to
- * need one for).
+ * Phase 17: `payload->forcedOfferId` (set by `public/landing-offer.php`,
+ * legacy's `forcedOfferId` this class's own docblock previously listed as
+ * NOT ported — now is, for that one caller) resolves the offer by id
+ * directly and BYPASSES the `landingId !== null` skip check above it —
+ * deliberately, since `LandingOfferDispatcher`'s whole premise is "a
+ * landing was already shown, now report/confirm which offer" (`landingId`
+ * being non-null is exactly the normal case there, not the exception).
+ *
+ * NOT ported: the `IGNORE_OFFER_PARAM="exit"` param-skip,
+ * `ConversionCapacityService::findAvailableOffer()` (daily-cap
+ * alternate-offer chain — `offers.conversion_cap_enabled`/`daily_cap`
+ * columns exist in `backend/` but no runtime check reads them yet),
+ * `needToken` itself (no token flow to need one for).
  */
 class ChooseOfferStage
 {
@@ -49,6 +56,26 @@ class ChooseOfferStage
         $stream = $payload->stream;
 
         if ($stream === null || !in_array($stream['schema'], ['landings', 'offers'], true)) {
+            return $payload;
+        }
+
+        if ($payload->forcedOfferId !== null) {
+            $forcedOfferId = $payload->forcedOfferId;
+            $payload->forcedOfferId = null;
+
+            $stmt = Db::instance()->prepare("SELECT * FROM offers WHERE id = ? AND state = 'active' LIMIT 1");
+            $stmt->execute([$forcedOfferId]);
+            $offer = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
+
+            if ($offer === null) {
+                return $payload;
+            }
+
+            $payload->offerId = (int) $offer['id'];
+            $payload->actionType = $offer['action_type'];
+            $payload->actionPayload = $offer['action_payload'];
+            $payload->actionOptions = $offer['action_options'] ?? null;
+
             return $payload;
         }
 
