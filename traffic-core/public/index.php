@@ -80,6 +80,7 @@ use TrafficCore\Pipeline\ChooseLandingStage;
 use TrafficCore\Pipeline\ChooseOfferStage;
 use TrafficCore\Pipeline\BuildRawClickStage;
 use TrafficCore\Pipeline\GenerateTokenStage;
+use TrafficCore\Pipeline\UpdateUniquenessStage;
 use TrafficCore\Pipeline\UpdateHitLimitStage;
 use TrafficCore\Pipeline\UpdateCostsStage;
 use TrafficCore\Pipeline\UpdatePayoutStage;
@@ -106,6 +107,7 @@ $runner = new PipelineRunner([
     new ChooseOfferStage(),
     new BuildRawClickStage(),
     new GenerateTokenStage(),
+    new UpdateUniquenessStage(),
     new UpdateHitLimitStage(),
     new UpdateCostsStage(),
     new UpdatePayoutStage(),

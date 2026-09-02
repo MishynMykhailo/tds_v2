@@ -48,20 +48,16 @@ namespace TrafficCore\Pipeline;
  * cost from this stage at all (cost stays 0), matching legacy's real,
  * if surprising, behavior — not a bug introduced by this port.
  *
- * **Finding #2 (documented, real, temporary limitation)**: the only
- * *reachable* cost-applying path (`isCostPerAcquisition() ||
- * isCostPerSale() || isCostRevShare()` true, `isCostPerUnique()` false)
- * additionally requires `$rawClick->isUniqueCampaign()` — a
- * per-campaign-uniqueness flag. traffic-core has no per-campaign/
- * per-stream/global uniqueness infrastructure yet (only the visitor row
- * itself is real so far — confirmed: `clicks.is_unique_campaign` exists
- * as a schema column but nothing in this project populates it). Per this
- * task's explicit instruction, `isUniqueCampaign()` is hardcoded `false`
- * below rather than fabricating a check — meaning, combined with Finding
- * #1, **this stage currently never applies a nonzero cost for ANY
- * cost_type**, until real campaign-uniqueness flags are built. This is a
- * faithful, literal port of legacy's own gating logic, not a shortcut
- * taken here.
+ * **Finding #2, RESOLVED**: the only *reachable* cost-applying path
+ * (`isCostPerAcquisition() || isCostPerSale() || isCostRevShare()` true,
+ * `isCostPerUnique()` false) additionally requires
+ * `$rawClick->isUniqueCampaign()` — a per-campaign-uniqueness flag. This
+ * was hardcoded `false` until `UpdateUniquenessStage` (runs earlier in
+ * the pipeline, before this stage) started populating
+ * `payload->rawClick['is_unique_campaign']` for real via
+ * `TrafficCore\Uniqueness\UniquenessService` — cost now actually applies
+ * for CPA/CPS/RevShare campaigns on a visitor's first hit within the
+ * campaign's `cookies_ttl` window, matching legacy.
  */
 class UpdateCostsStage
 {
@@ -122,7 +118,7 @@ class UpdateCostsStage
                 return $payload;
             }
 
-            if ($this->isUniqueCampaign()) {
+            if (!empty($payload->rawClick['is_unique_campaign'])) {
                 $payload->rawClick['cost'] = $cost;
             }
 
@@ -130,16 +126,6 @@ class UpdateCostsStage
         }
 
         return $payload;
-    }
-
-    /**
-     * See Finding #2 above — hardcoded `false` until traffic-core has
-     * real per-campaign uniqueness flags. Deliberately a method (not an
-     * inline literal) so it is easy to find/grep and swap out later.
-     */
-    private function isUniqueCampaign(): bool
-    {
-        return false;
     }
 
     private function applyTrafficLoss(float $cost, float $trafficLoss): float

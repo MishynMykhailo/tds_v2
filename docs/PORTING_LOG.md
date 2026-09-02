@@ -1075,5 +1075,29 @@ entity-биндинг), альтернативные входные точки, 
 (полная версия), асинхронная запись клика, FCGI/php-fpm для
 `local_file` (не критично).
 
+## traffic-core — Фаза 12 (визитор-уникальность, разблокировала cost) — 2026-09-02
+
+Портирован `UpdateCampaignUniquenessSessionStage`/
+`UpdateStreamUniquenessSessionStage`/`SaveUniquenessSessionStage` —
+слиты в одну `UpdateUniquenessStage` (та же адаптация, что и
+`CheckParamAliasesStage`: один проход вместо мутации общего объекта).
+Только Redis (не куки, как в легаси, — `EXISTS`+`SETEX` на ключ, TTL =
+`campaign.cookies_ttl` часов), тот же идиоматичный паттерн, что
+`HitLimitService`/`LpTokenService`.
+
+Разблокировала Finding #2 из Фазы 11: `UpdateCostsStage`'s
+`isUniqueCampaign()`-заглушка заменена на чтение реального
+`payload->rawClick['is_unique_campaign']`. Cost теперь реально
+применяется для CPA/CPS/RevShare на первом хите визитора в TTL-окне.
+
+Verification: первый клик (IP+UA) → unique=1 по всем трём измерениям,
+cost применился; повторный тот же IP+UA → unique=0, cost=0; другой UA,
+тот же IP (`uniqueness_method=ip_ua`) → снова unique=1, cost применился.
+Фикстуры (БД + Redis) удалены.
+
+Осталось из визитор/уникальность кластера: Redis-биндинг сущностей
+(sticky лендинг/оффер/стрим), cookie-хранилище уникальности (сознательно
+не портировано — см. Фазу 12 в TRAFFIC_CORE_PLAN.md).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

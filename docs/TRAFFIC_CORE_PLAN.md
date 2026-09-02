@@ -956,23 +956,54 @@ payout применился (`is_sale=1`, `sale_revenue=3.00` от CPC-оффе�
 **Итого Фазы 11: постбеки и hit-limit/payout закрыты. Cost временно
 неактивен (см. находку выше) до портирования per-campaign uniqueness.**
 
+## traffic-core — Фаза 12 (визитор-уникальность, разблокировала cost) — 2026-09-02
+
+Портированы `UpdateCampaignUniquenessSessionStage`+
+`UpdateStreamUniquenessSessionStage`+`SaveUniquenessSessionStage`
+(слиты в одну стадию `UpdateUniquenessStage` — тот же паттерн адаптации,
+что и `CheckParamAliasesStage`: traffic-core строит `rawClick` за один
+проход, а не мутирует общий объект по многим стадиям).
+
+Архитектурное упрощение (не урезание корректности): легаси хранит один
+JSON-блоб на uniqueness-id (`campaigns[id]=ts`/`streams[id]=ts`/`time=ts`)
+в куках И/ИЛИ Redis/MySQL (`_getSessions()` требует согласия ОБОИХ
+хранилищ). Порт использует ТОЛЬКО server-side Redis — `EXISTS`+`SETEX`
+на отдельный ключ на каждое измерение (`uniq:campaign:<id>:<hash>` и
+т.д.), TTL = `campaign.cookies_ttl` часов, тот же идиоматичный паттерн,
+что уже даёт `HitLimitService`/`LpTokenService`. Uniqueness-id —
+буквальный порт `getUniquenessId()`: `md5(ip . (uniqueness_method !==
+'ip' ? ua : ''))`. НЕ портировано: cookie-хранилище (нет established
+инфраструктуры записи response-куки в traffic-core), "deprecated"
+murmurhash3-fallback id (не с чем быть обратно совместимым).
+
+**Разблокировала Finding #2 из Фазы 11**: `UpdateCostsStage`'s
+`isUniqueCampaign()`-заглушка (`return false`) заменена на чтение
+реального `payload->rawClick['is_unique_campaign']`, которое теперь
+пишет `UpdateUniquenessStage` (вставлена в пайплайн раньше). Cost
+реально применяется для CPA/CPS/RevShare-кампаний на первом хите
+визитора в окне `cookies_ttl`.
+
+Verification: campaign `cost_type=CPA`, `cost_value=2.50`,
+`cookies_ttl=24` — первый клик (IP+UA) → `is_unique_campaign/stream/
+global=1`, `cost=2.50`; второй клик тем же IP+UA → все три `0`,
+`cost=0.000000` (совпадает с ожиданием — cost реально не применяется
+повторно); третий клик с ДРУГИМ UA, тем же IP (`uniqueness_method=
+ip_ua`) → снова unique=1, cost=2.50. Фикстуры (БД + Redis-ключи)
+удалены.
+
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
 - ~~`local_file`-экшен~~ — портирован Фазой 8 (см. выше). Все 19
   `action_type`-ключей теперь реализованы; ничего из этого списка не
   относится к экшенам самим по себе, только к периферийной инфраструктуре
   ниже.
-- ~~**Визитор find-or-create + GeoDb/device**~~ — портировано Фазой 9
-  (`ResolveVisitorStage`/`VisitorResolver`, реальный `visitors` +
-  словари, IP2Location LITE DB3, `matomo/device-detector`). Всё ещё НЕ
-  портировано из этого кластера: `SaveUniquenessSessionStage`/
-  `UpdateStreamUniquenessSessionStage`/`UpdateCampaignUniquenessSessionStage`
-  (уникальные клики per-stream/per-campaign/global для отчётов —
-  отдельная механика поверх уже реального `visitor_id`), Redis-биндинг
-  сущностей (`EntityBindingService` — sticky-выбор лендинга/оффера/
-  стрима для одного визитора, часть `SetCookieStage`, которая целиком
-  НЕ портирована — см. её докблок в легаси, там же uniqueness-cookie
-  логика).
+- ~~**Визитор find-or-create + GeoDb/device**~~ — портировано Фазой 9.
+  ~~**Уникальные клики per-stream/per-campaign/global**~~ — портировано
+  Фазой 12 (`UpdateUniquenessStage`, Redis `EXISTS`+`SETEX`). Всё ещё НЕ
+  портировано: Redis-биндинг сущностей (`EntityBindingService` —
+  sticky-выбор лендинга/оффера/стрима для одного визитора, часть
+  `SetCookieStage`, которая целиком НЕ портирована — см. её докблок в
+  легаси), cookie-хранилище уникальности (порт Фазы 12 — только Redis).
 - ~~**`BuildRawClickStage` — остальные подшаги**~~ — портировано Фазой 9
   (GeoDb/device/визитор) + Фазой 10 (referrer/source/se_referrer/
   keyword/search_engine/x_requested_with/cost/sub_ids/extra_params/
