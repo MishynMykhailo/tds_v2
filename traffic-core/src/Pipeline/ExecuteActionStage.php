@@ -14,6 +14,7 @@ use TrafficCore\Pipeline\Actions\Iframe;
 use TrafficCore\Pipeline\Actions\Js;
 use TrafficCore\Pipeline\Actions\JsForIframe;
 use TrafficCore\Pipeline\Actions\JsForScript;
+use TrafficCore\Pipeline\Actions\LocalFile;
 use TrafficCore\Pipeline\Actions\Meta;
 use TrafficCore\Pipeline\Actions\Remote;
 use TrafficCore\Pipeline\Actions\ShowHtml;
@@ -57,13 +58,9 @@ use TrafficCore\Pipeline\Actions\SubId;
  * (`LpTokenService::generateUserKey()` + `Firebase\JWT\JWT`) is
  * self-contained and needed nothing but a small receiving endpoint.
  *
- * Deliberately still NOT implemented (501, visible not silent):
- *  - `local_file` — needs `Component\Landings\LocalFile\PageWrapper`, the
- *    RUNTIME landing-page file-serving/PHP-execution engine (distinct from
- *    the already-ported Editor/Cleaner ADMIN file-management CRUD) — a
- *    substantial, security-sensitive subsystem (executes uploaded landing
- *    page PHP) that deserves its own dedicated porting session, not a
- *    quick pass in this batch.
+ * `local_file` also ported (Phase 8) — see `LocalFile`, `LocalFileSandbox`,
+ * `HtmlPathAdapter`, and `bin/execute_local_file.php`. All 19 real
+ * `action_type` keys are now implemented.
  */
 class ExecuteActionStage
 {
@@ -81,6 +78,7 @@ class ExecuteActionStage
         'js' => Js::class,
         'js_for_iframe' => JsForIframe::class,
         'js_for_script' => JsForScript::class,
+        'local_file' => LocalFile::class,
         'meta' => Meta::class,
         'remote' => Remote::class,
         'show_html' => ShowHtml::class,
@@ -105,7 +103,7 @@ class ExecuteActionStage
 
         $handlerClass = self::REGISTRY[$payload->actionType] ?? null;
         if ($handlerClass === null) {
-            $payload->abort(501, "Action type \"{$payload->actionType}\" not implemented in traffic-core yet (local_file is deliberately deferred, see this class's docblock)");
+            $payload->abort(501, "Action type \"{$payload->actionType}\" not implemented in traffic-core");
             return $payload;
         }
 

@@ -562,19 +562,89 @@ token=<jwt>`; (2) переход по этому URL (порт подставл�
 `200` без ошибок. Фикстуры удалены после. `php -l` чисто на всех новых/
 изменённых файлах.
 
-Итого действий: 18 из 19 реальных ключей. Осталось только `local_file`
-(см. "Осознанно отложено" ниже — реально большой, security-чувствительный
-кластер, НЕ похожий по объёму на `double_meta`/`campaign`, оценка
-подтверждена повторным чтением `PageWrapper.php`/`LocalFileService.php`
-в эту же сессию: CGI/FastCGI PHP-sandbox executor + `MacrosProcessor` +
-HTML-rewriting, ни один из которых не портирован нигде в traffic-core).
+Итого действий на конец Фазы 7: 18 из 19 реальных ключей.
+
+## traffic-core — Фаза 8 (local_file-экшен) — 2026-09-02
+
+Портирован последний из 19 реальных `action_type`-ключей. Прочитаны
+буквально `PageWrapper.php`, `LocalFileService.php`, `PageInfo.php`,
+`Core\Sandbox\{Sandbox,SandboxContext,SandboxSubject,CgiExecutor\
+CgiExecutor}`, `bin/execute_script.php`, `CurlService::{adaptAnchors,
+addBasePath,adaptResourcePaths,adaptFormAction}` (application/Traffic/...,
+application/Core/Sandbox/..., application/bin/execute_script.php).
+
+**Storage-путь переиспользован, не заново придуман**: `backend/`'s уже
+портированный `App\Services\LocalFileService` (Editor/Cleaner CRUD)
+хранит файлы лендингов в `base_path($lpDir)` (`backend/<lp_dir настройка,
+дефолт "lander">/<folder>`) и уже применяет полный набор
+upload-time-проверок из легаси `Validator` (запрещённые файлы/функции/
+charset) плюс собственную защиту от traversal (`resolveSafePath()`,
+уже документированное улучшение над легаси). `LocalFileSandbox`
+(traffic-core) вычисляет ТОТ ЖЕ физический путь (`<repo-root>/backend/
+<lp_dir>`, override через `LANDINGS_STORAGE_PATH` env) — значит файл,
+загруженный через уже готовую админку, сразу обслуживается тут без
+доп. синхронизации.
+
+**Инфраструктурная замена, не урезание функциональности (задокументировано
+в докблоках `bin/execute_local_file.php`/`LocalFileSandbox`)**: легаси
+исполняет PHP лендинга через `php-cgi` (CGI-протокол). Пакет
+`php8.4-cgi` не встал в `tds2-php-dev` (Debian trixie) —
+`apt-get install` падает с неудовлетворённой `phpapi-*`-зависимостью,
+т.к. базовый образ `php:8.4-cli` собирает PHP из исходников, а не через
+apt, и параллельного apt-PHP-стека в образе нет; пересборка `php-cgi` из
+исходников ради этой фичи признана не стоящей затрат сборки. Вместо
+этого — `proc_open` обычного CLI SAPI (`bin/execute_local_file.php`,
+JSON на stdin/stdout вместо сырого CGI-формата; `header()`/
+`http_response_code()` одинаково работают и читаются назад через
+`headers_list()`) — тот же практический результат.
+
+**Security-хардening СВЕРХ легаси (осознанное усиление, не
+расхождение)**: легаси у `Sandbox::execute()` вообще не ограничивает
+рантайм исполняемого файла — вся защита только на этапе загрузки
+(`Validator`). Порт добавляет `-d disable_functions=exec,shell_exec,
+system,passthru,proc_open,popen,proc_close,pcntl_exec,pcntl_fork` и
+`-d open_basedir=<папка_лендинга>:/tmp` при каждом запуске
+`bin/execute_local_file.php`. Также сам файл-воркер НИКОГДА не лежит в
+`public/` и не привязан ни к какому порту/роуту — легаси-гейт
+`REMOTE_ADDR === "127.127.127.127"` в `execute_script.php` не имеет
+смысла портировать буквально (там он защищает от прямого HTTP-запроса
+к CGI-скрипту; здесь такого пути вообще не существует).
+
+**НЕ портировано, задокументировано в `HtmlPathAdapter`'s докблоке**:
+`addBasePath()` — легаси инжектит `<base href>` на РЕАЛЬНЫЙ маршрутизируемый
+URL лендинга (`PageInfo::uri()`); в traffic-core нет path-based роутинга
+лендингов вообще (`FindCampaignStage` резолвит только `?campaign=alias`
+или домен-дефолт) — подставлять несуществующий URL было бы хуже, чем
+честно пропустить. `processMacros()` — тот же общий пробел, что и у всех
+остальных экшенов (см. докблок `ExecuteActionStage`), не повторяется.
+
+Verification (Docker, `tds2-php-dev`, `deploy_default`, порт 8101,
+`LANDINGS_STORAGE_PATH` указывал на смонтированную `backend/lander/`,
+кампания `tc8-lf` + стрим `schema=landings` + лендинг `action_type=
+local_file` + association): (1) реальный PHP-лендинг с `<?php ... ?>` —
+выполнился в песочнице, `$_SERVER['REMOTE_ADDR']` и `$rawClick['sub_id']`
+дошли до кода лендинга корректно, `adaptAnchors`/`adaptFormAction`
+отработали на результате (`href="#x"` → onclick-паттерн, `action=""` →
+`action="index.php"`); (2) `lp_allow_php=0` → тот же файл отдан как
+raw-текст (PHP-теги не исполнены), как и предписывает
+`_mustReadAsPlainText()`; (3) пустая папка (нет index-файла) → `502` с
+точным легаси-текстом ошибки; (4) `folder` с `../../etc` (path traversal)
+→ отклонено, `502`, наружу не вышло; (5) `lp_php_timeout=1` + лендинг с
+`sleep(5)` → `504` за ~1с, не зависает на все 5; (6) лендинг с `system(
+'id')` → вызов недоступен (`disable_functions` сработал,
+`function_exists('system')` = false), `open_basedir` корректно ограничен
+папкой лендинга + `/tmp`. Фикстуры (БД + файлы) удалены после. `php -l`
+чисто на всех новых файлах.
+
+**Итого: все 19 реальных `action_type`-ключей репозитория теперь
+портированы в traffic-core.**
 
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
-- **`local_file`-экшен** — отдельный security-чувствительный CGI/FastCGI
-  PHP-sandbox рантайм-движок раздачи файлов лендинга (`PageWrapper`),
-  см. Фазу 7 выше. (`double_meta` портирован Фазой 7 — был в этом списке
-  ошибочно, см. её "Исправлена собственная ошибка координатора".)
+- ~~`local_file`-экшен~~ — портирован Фазой 8 (см. выше). Все 19
+  `action_type`-ключей теперь реализованы; ничего из этого списка не
+  относится к экшенам самим по себе, только к периферийной инфраструктуре
+  ниже.
 - **Визитор/уникальность** (`Component\Clicks\Model\Visitor`,
   `SaveUniquenessSessionStage`, `UpdateStreamUniquenessSessionStage`,
   `UpdateCampaignUniquenessSessionStage`, Redis-биндинг визиторов) —

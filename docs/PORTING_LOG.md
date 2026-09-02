@@ -839,5 +839,81 @@ gateway-URL с JWT; переход по gateway-URL с тем же UA → ред
 "большой отдельный кластер" верна (CGI/FastCGI PHP-sandbox executor +
 `MacrosProcessor` + HTML-rewriting — ни один компонент не портирован).
 
+## traffic-core — Фаза 8 (local_file-экшен) — 2026-09-02
+
+Портирован `local_file` — последний из 19 реальных `action_type`-ключей.
+Полная детализация — `docs/TRAFFIC_CORE_PLAN.md` Фаза 8. Storage-путь
+переиспользует уже готовый `backend/`'s `App\Services\LocalFileService`
+(та же физическая директория `backend/<lp_dir>/<folder>`, override через
+`LANDINGS_STORAGE_PATH` env) — файлы, загруженные через уже портированную
+Editor/Cleaner админку, обслуживаются без доп. синхронизации.
+
+Инфраструктурная замена (не урезание): `php8.4-cgi` не встал в
+`tds2-php-dev` (Debian trixie, неудовлетворённая `phpapi-*`-зависимость —
+базовый образ собирает PHP из исходников, не через apt); вместо
+`php-cgi`+CGI-протокола — `proc_open` обычного CLI SAPI
+(`bin/execute_local_file.php`, JSON на stdin/stdout). Добавлено
+security-хардение СВЕРХ легаси: `disable_functions`
+(exec/system/proc_open/etc.) и `open_basedir` (папка лендинга + `/tmp`)
+на каждый запуск — легаси вообще не ограничивает рантайм исполняемого
+файла, только upload-time сканирование.
+
+Новое: `LocalFile` (экшен), `LocalFileSandbox` (settings-lookup,
+path-resolve с traversal-защитой, proc_open+timeout), `HtmlPathAdapter`
+(3 из 4 HTML-rewrite методов `CurlService` — `addBasePath()` не
+портирован, нет path-based роутинга лендингов в traffic-core, см. её
+докблок), `bin/execute_local_file.php` (воркер песочницы, вне `public/`).
+
+Verification: живые curl-тесты (Docker, порт 8101, `LANDINGS_STORAGE_PATH`
+на смонтированную `backend/lander/`) — реальный PHP-лендинг выполнился,
+`$_SERVER`/`$rawClick` дошли, HTML-rewriting применился; `lp_allow_php=0`
+→ raw-текст без исполнения; пустая папка → `502` с легаси-текстом
+ошибки; `folder=../../etc` (traversal) → отклонено; `lp_php_timeout=1` +
+`sleep(5)`-лендинг → `504` за ~1с, не завис; `system('id')` внутри
+лендинга → недоступен, `open_basedir` корректно ограничен. Фикстуры
+(БД + файлы) удалены после. `php -l` чисто.
+
+**Итого: все 19 реальных `action_type`-ключей репозитория портированы в
+traffic-core.** Остаются нетронутыми периферийные кластеры, не
+относящиеся к самим экшенам — GeoDb/device/bot-резолвинг, визитор/
+уникальность, JWT/cookie-биндинг офферов, hit-limit/cost/payout,
+постбеки, альтернативные входные точки (см. "Осознанно отложено" в
+`TRAFFIC_CORE_PLAN.md`).
+
+## GeoDb — находка по факту, не отдельная фаза — 2026-09-02
+
+Пользователь спросил, почему не портирован GeoDb-резолвинг, ссылаясь на
+реальный файл `var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN`
+(единственный реально существующий бинарник — все остальные провайдеры
+в `Component/GeoDb/{Maxmind,Sypex,ProIP,Tds}` есть только как код,
+без единого реального `.BIN`/`.dat`-файла на диске — заявление "у всех
+остальных так же прописаны правила" не подтвердилось).
+
+Прочитаны буквально `BuildRawClickStage::_findIpInfo()`/
+`_findDeviceInfo()`, `RawClick::serialize()`, `Component\Clicks\
+ClickProcessing\SaveClicks`. **Ключевая находка**: резолвленные
+гео/device/ISP-данные (`country`/`region`/`city`/`browser`/`os`/
+`isp`/`connection_type`/`operator`/...) НЕ пишутся в `tds_clicks`
+вообще — подтверждено `DESCRIBE tds_clicks` на живой легаси dev-БД,
+там только `is_bot`/`is_using_proxy` (булевы флаги). Все эти поля
+нормализованы в ОТДЕЛЬНУЮ таблицу `tds_visitors`
+(`country_id`/`region_id`/`city_id`/`device_type_id`/`browser_id`/
+`os_id`/`connection_type_id`/`operator_id`/`isp_id`/`ip_id`/
+`user_agent_id`/`language_id`/`screen_id` — все FK на словари),
+подтверждено `DESCRIBE tds_visitors` там же. `clicks.visitor_id`
+ссылается на эту таблицу.
+
+**Вывод**: "GeoDb-резолвинг" неотделим от "визитор/уникальность"
+(`Component\Clicks\Model\Visitor`) — уже отдельный пункт в списке
+отложенного в `TRAFFIC_CORE_PLAN.md`. В tds_v2 схеме сейчас НЕТ таблицы
+`visitors` и её словарей вообще (`clicks.visitor_id` — просто
+`random_int()`). Полноценный GeoDb требует: таблицу `visitors` + ~9
+словарных таблиц, реальный find-or-create по ip+ua, IP2Location DB3
+Lite reader (даёт только country/region/city — ISP/carrier/connection_type
+физически недоступны, в LITE-тарифе этих данных нет), UA-parsing для
+device/browser/os. Не начато в эту сессию — оценено как отдельная
+полноценная сессия, сопоставимая по объёму с уже сделанными фазами, не
+пристройка к уже сделанному. Ждёт явного решения пользователя начинать.
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
