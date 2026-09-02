@@ -21,11 +21,13 @@ use TrafficCore\Db;
  *      NULL : $streams[0];` — filters are never consulted for the
  *      default/fallback stream, this is not a simplification made here.
  *
- * NOT ported (see docs/TRAFFIC_CORE_PLAN.md): visitor entity binding /
- * sticky streams (`EntityBindingService`, Redis bind-by-visitor — part of
- * the "Визитор/уникальность" cluster), the `landings`/`offers` schema
- * branch (handled by separate `ChooseLandingStage`/`ChooseOfferStage`
- * stages since Phase 3, unrelated to this class). Phase 4: `CheckFilters`
+ * Phase 13: sticky-stream binding is now real — see `StreamRotator`'s
+ * own docblock, ported inside `chooseByWeight()` rather than here.
+ *
+ * NOT ported (see docs/TRAFFIC_CORE_PLAN.md): the `landings`/`offers`
+ * schema branch (handled by separate `ChooseLandingStage`/
+ * `ChooseOfferStage` stages since Phase 3, unrelated to this class).
+ * Phase 4: `CheckFilters`
  * now runs a real per-filter engine (`Filters\FilterEngine`) using
  * `$payload->signal` (`CaptureSignalStage`, runs before this stage) —
  * see CheckFilters' own docblock for the implemented/deferred filter list.
@@ -36,12 +38,9 @@ class ChooseStreamStage
     {
         $pdo = Db::instance();
         $campaignId = $payload->campaign['id'];
+        $campaignType = $payload->campaign['type'] ?? 'weight';
 
-        $campaignStmt = $pdo->prepare('SELECT type FROM campaigns WHERE id = ?');
-        $campaignStmt->execute([$campaignId]);
-        $campaignType = $campaignStmt->fetchColumn() ?: 'weight';
-
-        $rotator = new StreamRotator($payload->signal);
+        $rotator = new StreamRotator($payload->signal, $payload->campaign);
         $stream = null;
 
         // Tier 1: forced.

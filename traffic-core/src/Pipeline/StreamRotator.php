@@ -2,6 +2,8 @@
 
 namespace TrafficCore\Pipeline;
 
+use TrafficCore\Uniqueness\EntityBindingService;
+
 /**
  * Port of legacy `Traffic\Actions\StreamRotator`
  * (application/Traffic/Pipeline/Rotator/StreamRotator.php).
@@ -11,18 +13,38 @@ namespace TrafficCore\Pipeline;
  * shuffle candidates, weighted `mt_rand` pick, if the pick fails the
  * filter check drop it and recurse on the remainder).
  *
- * NOT ported: visitor entity binding / sticky streams
- * (`EntityBindingService`, `Campaign::isBindVisitorsEnabled()`, Redis
- * bind-by-visitor lookup in `chooseByWeight()`'s `_findBoundStream()`) —
- * part of the separate "Визитор/уникальность" cluster already listed as
- * deferred in docs/TRAFFIC_CORE_PLAN.md. This class always goes straight
- * to the roll, never checks for a previously-bound stream.
+ * Sticky-stream binding (Phase 13): `chooseByWeight()` now ports
+ * `_findBoundStream()` — if the campaign has `bind_visitors` enabled
+ * (`type='weight'` AND a non-empty `bind_visitors` value — see
+ * `Campaign::isBindVisitorsEnabled()`), check `EntityBindingService`
+ * for a previously-bound stream id BEFORE rolling. **Literal legacy
+ * quirk, ported as-is**: a bound stream match is returned WITHOUT
+ * re-running `CheckFilters` on it (`_findBoundStream()` only checks
+ * `$stream->getId() == $streamId` against the candidate list, no filter
+ * call) — so a visitor's binding survives even if the stream's filters
+ * would now reject them. After a fresh roll (no binding found, or
+ * binding's stream missing from the current candidate list), the result
+ * is bound for next time.
  */
 class StreamRotator
 {
-    /** @param array<string,mixed> $signal see Signal::fromRequest() */
-    public function __construct(private readonly array $signal)
+    /**
+     * @param array<string,mixed> $signal see Signal::fromRequest()
+     * @param array<string,mixed>|null $campaign Full campaign row — pass
+     *        null to disable sticky-stream binding entirely (e.g. from a
+     *        call site that doesn't have visitor identity available).
+     */
+    public function __construct(
+        private readonly array $signal,
+        private readonly ?array $campaign = null,
+    ) {
+    }
+
+    private function bindingEnabled(): bool
     {
+        return $this->campaign !== null
+            && ($this->campaign['type'] ?? null) === 'weight'
+            && !empty($this->campaign['bind_visitors']);
     }
 
     /**
@@ -46,7 +68,34 @@ class StreamRotator
      */
     public function chooseByWeight(array $streams): ?array
     {
-        return $this->rollDice($streams);
+        if (!$this->bindingEnabled()) {
+            return $this->rollDice($streams);
+        }
+
+        $ip = (string) ($this->signal['ip'] ?? '');
+        $userAgent = (string) ($this->signal['userAgent'] ?? '');
+        $uniqueByIpUa = ($this->campaign['uniqueness_method'] ?? 'ip_ua') !== 'ip';
+        $campaignId = (int) $this->campaign['id'];
+
+        $binding = new EntityBindingService();
+        $boundId = $binding->find(EntityBindingService::TYPE_STREAM, $campaignId, $ip, $userAgent, $uniqueByIpUa);
+
+        if ($boundId !== null) {
+            foreach ($streams as $stream) {
+                if ((int) $stream['id'] === $boundId) {
+                    return $stream;
+                }
+            }
+        }
+
+        $stream = $this->rollDice($streams);
+
+        if ($stream !== null) {
+            $ttlSeconds = (int) ($this->campaign['cookies_ttl'] ?? 0) * 3600;
+            $binding->bind(EntityBindingService::TYPE_STREAM, $campaignId, $ip, $userAgent, $uniqueByIpUa, (int) $stream['id'], $ttlSeconds);
+        }
+
+        return $stream;
     }
 
     /**

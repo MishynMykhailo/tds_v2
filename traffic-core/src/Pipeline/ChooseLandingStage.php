@@ -3,6 +3,7 @@
 namespace TrafficCore\Pipeline;
 
 use TrafficCore\Db;
+use TrafficCore\Uniqueness\EntityBindingService;
 
 /**
  * Port of legacy `Traffic\Pipeline\Stage\ChooseLandingStage`
@@ -15,12 +16,14 @@ use TrafficCore\Db;
  * does this unconditionally too, no gating flag involved) plus
  * `payload.landingId` (used by `BuildRawClickStage` for `clicks.landing_id`).
  *
+ * Phase 13: sticky-landing binding is now real — see
+ * `LandingOfferRotator`'s own docblock.
+ *
  * NOT ported: a pre-selected/"current" landing short-circuit (legacy
  * `$currentLanding` — only relevant once forced-landing query params
- * exist, which they don't here), entity binding / sticky visitor
- * selection (Redis), `needToken`/`addTokenToUrl` side effects (token flow
- * not implemented — see ChooseOfferStage's docblock for the related
- * offer-side deviation).
+ * exist, which they don't here), `needToken`/`addTokenToUrl` side
+ * effects (token flow not implemented — see ChooseOfferStage's docblock
+ * for the related offer-side deviation).
  */
 class ChooseLandingStage
 {
@@ -41,7 +44,14 @@ class ChooseLandingStage
             return $payload;
         }
 
-        $landing = (new LandingOfferRotator())->getRandom($associations, 'landings', 'landing_id');
+        $landing = (new LandingOfferRotator())->getRandom(
+            $associations,
+            'landings',
+            'landing_id',
+            $payload->campaign,
+            $payload->signal,
+            EntityBindingService::TYPE_LANDING,
+        );
 
         if ($landing === null) {
             return $payload;

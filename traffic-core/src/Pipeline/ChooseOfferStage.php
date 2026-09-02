@@ -3,6 +3,7 @@
 namespace TrafficCore\Pipeline;
 
 use TrafficCore\Db;
+use TrafficCore\Uniqueness\EntityBindingService;
 
 /**
  * Port of legacy `Traffic\Pipeline\Stage\ChooseOfferStage`
@@ -31,12 +32,15 @@ use TrafficCore\Db;
  * `actionType`/`actionPayload`/`actionOptions` from the offer
  * unconditionally instead of gating on `isForceRedirectOffer`.
  *
+ * Phase 13: sticky-offer binding is now real — see
+ * `LandingOfferRotator`'s own docblock.
+ *
  * NOT ported: `forcedOfferId` (query-param override + the
  * `IGNORE_OFFER_PARAM="exit"` param-skip), `ConversionCapacityService::
  * findAvailableOffer()` (daily-cap alternate-offer chain — `offers.
  * conversion_cap_enabled`/`daily_cap` columns exist in `backend/` but no
- * runtime check reads them yet), entity binding / sticky visitor
- * selection (Redis), `needToken` itself (no token flow to need one for).
+ * runtime check reads them yet), `needToken` itself (no token flow to
+ * need one for).
  */
 class ChooseOfferStage
 {
@@ -61,7 +65,14 @@ class ChooseOfferStage
             return $payload;
         }
 
-        $offer = (new LandingOfferRotator())->getRandom($associations, 'offers', 'offer_id');
+        $offer = (new LandingOfferRotator())->getRandom(
+            $associations,
+            'offers',
+            'offer_id',
+            $payload->campaign,
+            $payload->signal,
+            EntityBindingService::TYPE_OFFER,
+        );
 
         if ($offer === null) {
             return $payload;

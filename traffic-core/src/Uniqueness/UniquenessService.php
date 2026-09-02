@@ -45,7 +45,7 @@ class UniquenessService
      */
     public function check(string $ip, string $userAgent, bool $uniqueByIpUa, int $campaignId, ?int $streamId): array
     {
-        $id = $this->uniquenessId($ip, $userAgent, $uniqueByIpUa);
+        $id = self::uniquenessId($ip, $userAgent, $uniqueByIpUa);
         $redis = RedisClient::instance();
 
         $result = [
@@ -71,7 +71,7 @@ class UniquenessService
             return;
         }
 
-        $id = $this->uniquenessId($ip, $userAgent, $uniqueByIpUa);
+        $id = self::uniquenessId($ip, $userAgent, $uniqueByIpUa);
         $redis = RedisClient::instance();
 
         $redis->setex($this->key('campaign', $campaignId, $id), $ttlSeconds, '1');
@@ -81,7 +81,14 @@ class UniquenessService
         $redis->setex($this->key('global', 0, $id), $ttlSeconds, '1');
     }
 
-    private function uniquenessId(string $ip, string $userAgent, bool $uniqueByIpUa): string
+    /**
+     * Public since Phase-13's `EntityBindingService` reuses the exact
+     * same id (legacy's `EntityBindingService::findBoundEntity()`/
+     * `bindEntityRedis()` call `UniquenessSessionService::
+     * getUniquenessId()` too — one shared visitor-identity concept
+     * across uniqueness AND sticky entity binding).
+     */
+    public static function uniquenessId(string $ip, string $userAgent, bool $uniqueByIpUa): string
     {
         return md5($ip . ($uniqueByIpUa ? $userAgent : ''));
     }
