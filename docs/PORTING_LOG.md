@@ -1032,5 +1032,48 @@ recursion, redirect, честный 404), `CheckPrefetchStage` on/off,
 `ReferrerParserService` (нужна база паттернов поисковиков), bot/proxy-
 детекция (отдельные кластеры).
 
+## traffic-core — Фаза 11 (постбеки, hit-limit/cost/payout) — 2026-09-02
+
+Два куска параллельно двумя фоновыми агентами, сведены координатором
+без конфликтов (заранее разграничены файлы). Полная детализация —
+`docs/TRAFFIC_CORE_PLAN.md` Фаза 11.
+
+**Постбеки**: новый вход `public/postback.php`, `Postback`-класс
+(буквальный порт field-extraction), find-or-update конверсии по
+`sub_id` (упрощённый дедуп — `clicks.sub_id` уникален), апдейт
+`clicks.is_*`+revenue, best-effort исходящий S2S (traffic source + новая
+таблица `campaign_postbacks`, миграция `000031`) с минимальной макро-
+заменой через `curl`. Найден и НЕ воспроизведён реальный баг легаси —
+`PostbackDispatcher::dispatch()` никогда не вызывает `_updateBody()` в
+success/error ветках, `?return=jsonp/gif` физически недостижимы в
+реальном легаси. `postback_statuses` формат — JSON-массив строк,
+подтверждено чтением `TrafficSourcesController`, не угадано.
+
+**Hit-limit/cost/payout**: `HitLimitService` (Redis sorted set,
+буквальный порт `RedisStorage`), тип фильтра `limit` в `FilterEngine`
+стал реальным (был fail-open с Фазы 4) — `evaluate()` получил новый
+параметр `$streamId`. Payout (CPC-офферы) работает, подтверждено
+живьём. **Cost — крупная находка**: в реальном легаси cost применяется
+только когда `cost_type` в {CPA,CPS,RevShare} И
+`rawClick->isUniqueCampaign()` — вторая часть условия в traffic-core
+пока всегда `false` (per-campaign uniqueness не портирована), значит
+**cost сейчас не применяется вообще** — временное, задокументированное
+ограничение, не баг; арифметика (traffic_loss и т.д.) независимо
+подтверждена верной через временный override с последующим откатом.
+
+**Совместная проверка координатора**: один клик — реальный visitor,
+оффер, payout (is_sale=1, sale_revenue из payout_value) → 302; постбек
+по тому же sub_id с revenue=15.50 создал conversions-строку И
+перезаписал `clicks.sale_revenue` на 15.50 (постбек как источник
+истины поверх payout-оценки). Фикстуры (БД + Redis) удалены после всех
+тестов, обоими агентами и координатором.
+
+Итого: постбеки и hit-limit/payout реально работают. Cost портирован,
+но неактивен до per-campaign uniqueness. Осталось из крупных кластеров:
+визитор-уникальность (per-stream/per-campaign/global флаги + Redis
+entity-биндинг), альтернативные входные точки, `processMacros()`
+(полная версия), асинхронная запись клика, FCGI/php-fpm для
+`local_file` (не критично).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

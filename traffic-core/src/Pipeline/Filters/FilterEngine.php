@@ -2,6 +2,8 @@
 
 namespace TrafficCore\Pipeline\Filters;
 
+use TrafficCore\HitLimit\HitLimitService;
+
 /**
  * Ported subset of legacy `Component\StreamFilters\Filter\*` classes
  * (application/Component/StreamFilters/Filter/) — see
@@ -14,11 +16,25 @@ namespace TrafficCore\Pipeline\Filters;
  *
  * $signal shape (see Signal::fromRequest()): ip, referer, userAgent,
  * language, params (array), datetime (\DateTimeImmutable, UTC).
+ *
+ * `$streamId` (added for the `limit` filter type — see `limit()`'s
+ * docblock): the id of the stream the filter row being evaluated belongs
+ * to. Threaded through as a plain trailing parameter rather than, say,
+ * bundling it into `$signal` (which is per-REQUEST, not per-stream —
+ * `StreamRotator` builds one `Signal` and reuses it across every
+ * candidate stream it tries, so stuffing a stream id into it would mean
+ * mutating/rebuilding it per filter row for no benefit) or adding a
+ * `Payload`/stream-object parameter (this class takes no `Payload` at
+ * all today, by design — it's a pure function of "filter row + signal";
+ * a raw `int` keeps that). `CheckFilters::isPass()` already has the full
+ * stream row in scope at its one call site, so this is a one-line change
+ * there (`(int) $stream['id']`) — no other call site exists
+ * (confirmed via `grep -rn "FilterEngine::evaluate"`).
  */
 class FilterEngine
 {
     /** @param array<string,mixed>|scalar|null $payload */
-    public static function evaluate(string $name, string $mode, mixed $payload, array $signal): ?bool
+    public static function evaluate(string $name, string $mode, mixed $payload, array $signal, int $streamId): ?bool
     {
         if (self::isAnyParamName($name)) {
             return self::anyParam($name, $mode, $payload, $signal);
@@ -34,6 +50,7 @@ class FilterEngine
             'ipv_6' => self::ipv6($mode, $signal),
             'user_agent' => self::userAgent($mode, $payload, $signal),
             'language' => self::language($mode, $payload, $signal),
+            'limit' => self::limit($mode, $payload, $streamId, $signal),
             default => null,
         };
     }
@@ -297,5 +314,71 @@ class FilterEngine
         }
 
         return ($mode === 'accept' && $include) || ($mode === 'reject' && ! $include);
+    }
+
+    /**
+     * Port of `Filter\Limit::isPass()` (application/Component/
+     * StreamFilters/Filter/Limit.php) — real hit-limit enforcement,
+     * backed by `TrafficCore\HitLimit\HitLimitService` (Redis sorted set
+     * per stream). Legacy's `getModes()` returns `NULL` for this filter
+     * type (no accept/reject payload shape) — `$mode` is accepted here
+     * only for signature parity with every other private method in this
+     * class and is unused, exactly like legacy's `isPass()` ignores it.
+     *
+     * Ordering (ported faithfully, not a bug here): this check runs
+     * BEFORE the current click's own hit is recorded —
+     * `UpdateHitLimitStage::process()` (which calls `HitLimitService::
+     * store()`) runs later in the pipeline, after this filter has already
+     * decided pass/fail. So e.g. a `{"total":2}` limit blocks the 3rd
+     * click (the count read here was already 2 when checked), never the
+     * 2nd — the click being evaluated is never counted against itself.
+     */
+    private static function limit(string $mode, mixed $payload, int $streamId, array $signal): bool
+    {
+        $payload = is_array($payload) ? $payload : [];
+        $timestamp = $signal['datetime']->getTimestamp();
+        $service = new HitLimitService();
+
+        $limitExceeded = false;
+
+        if (isset($payload['per_hour']) && is_numeric($payload['per_hour'])
+            && $payload['per_hour'] <= $service->perHour($streamId, $timestamp)) {
+            $limitExceeded = true;
+        }
+
+        if (!$limitExceeded && isset($payload['per_day']) && is_numeric($payload['per_day'])
+            && $payload['per_day'] <= $service->perDay($streamId, $timestamp)) {
+            $limitExceeded = true;
+        }
+
+        if (!$limitExceeded && isset($payload['total']) && is_numeric($payload['total'])
+            && $payload['total'] <= $service->total($streamId)) {
+            $limitExceeded = true;
+        }
+
+        if (!$limitExceeded) {
+            $limitExceeded = self::limitCheckNotSetValue($payload);
+        }
+
+        return !$limitExceeded;
+    }
+
+    /**
+     * Port of `Filter\Limit::_checkNotSetValue()` — literal, including
+     * the odd real behavior it names: if a filter payload has all three
+     * keys (`per_hour`/`per_day`/`total`) PRESENT but ALL empty, the
+     * filter blocks every click. This is legacy's actual behavior for a
+     * misconfigured/emptied-out limit filter, not "fixed" here.
+     *
+     * @param array<string,mixed> $payload
+     */
+    private static function limitCheckNotSetValue(array $payload): bool
+    {
+        return array_key_exists('per_hour', $payload)
+            && array_key_exists('per_day', $payload)
+            && array_key_exists('total', $payload)
+            && empty($payload['per_hour'])
+            && empty($payload['per_day'])
+            && empty($payload['total']);
     }
 }

@@ -862,6 +862,100 @@ Verification: живые тесты — алиас через `campaigns.paramet
 on/off; `DomainRedirectStage` реальный 301 на https. Фикстуры удалены.
 `php -l` чисто.
 
+## traffic-core — Фаза 11 (постбеки, hit-limit/cost/payout) — 2026-09-02
+
+Два независимых куска, снова параллельно 2 агентами, снова сведены
+координатором одним заходом (без конфликтов файлов — оговорено заранее:
+hit-limit-агент единолично владел `public/index.php`/`FilterEngine.php`/
+`CheckFilters.php`, постбек-агент — только новыми файлами).
+
+### Постбеки (входящие + исходящие S2S)
+
+Новый вход `public/postback.php` — валидация секретного ключа
+(`settings.postback_key`, без легаси-фолбэка на `md5(SALT)` — своего
+глобального SALT в traffic-core нет; если ключ не задан, эндпоинт
+считается выключенным, не подделывает секрет), парсинг постбека
+(`Postback`-класс — sub_id/tid/status/revenue/cost/datetime по спискам
+альтернативных имён параметров, буквальный порт `Component\Postback\
+Postback`), поиск клика по `sub_id`, find-or-update конверсии (дедуп
+упрощён до одной конверсии на `sub_id` — `clicks.sub_id` уникален, что
+реализует запрошенный "тот же tid → апдейт на месте" как основной
+случай), апдейт `clicks.is_lead/is_sale/is_rejected`+revenue, затем
+best-effort исходящий постбек (traffic source + новая таблица
+`campaign_postbacks`, миграция `000031`) с минимальной макро-заменой
+(`{sub_id}`/`{status}`/`{tid}`/`{cost}`/`{revenue}` — не полный
+`MacrosProcessor`) через `curl` напрямую (тот же паттерн, что уже
+использует `Remote.php`-экшен, без Guzzle).
+
+**Реальный баг легаси найден и НЕ воспроизведён**: в оригинальном
+`PostbackDispatcher::dispatch()` success/`PostbackError`-ветки никогда
+не вызывают `_updateBody()` (падают с конца метода без return) — то
+есть `?return=jsonp`/`?return=gif` физически недостижимы в реальном
+легаси-коде. Порт всегда строит ответ из `$message`/`?return=`, поэтому
+все три формата (`jsonp`/`gif`-пиксель/текст) у нас реально работают.
+
+`postback_statuses`/`campaign_postbacks.statuses` — формат подтверждён
+чтением реального `TrafficSourcesController::decodeJsonField()` (не
+угадан): JSON-массив строк (`["sale","lead","rejected"]`), с
+толерантным fallback на comma-separated для руками написанных строк.
+
+Verification: sale→rejected той же связки sub_id+tid обновил ОДНУ и ту
+же строку `conversions` (не создал вторую); неверный ключ → 403, без
+конверсии; несуществующий sub_id → явная ошибка; `?return=gif`/`jsonp`
+оба отработали; исходящий S2S на `httpbin.org` подтверждён — макро-замена
+видна в эхо-ответе. Фикстуры удалены.
+
+### Hit-limit / cost / payout
+
+`UpdateHitLimitStage`+`HitLimitService` (Redis sorted set `rate:
+<stream_id>`, `ZCOUNT` по диапазонам timestamp — буквальный порт
+`RedisStorage`, `prune()` и мёртвый `rate_collection` SET сознательно не
+портированы) — теперь пишет реальные хиты. Тип фильтра `limit` в
+`FilterEngine`/`CheckFilters` стал РЕАЛЬНЫМ (был fail-open с Фазы 4) —
+`evaluate()` получил новый обязательный параметр `$streamId` (единственный
+call-site обновлён, подтверждено `grep`), буквальный порт `Filter\Limit`
+включая странный, но легаси-точный edge-case: все три порога заданы, но
+пустые → блокирует всё.
+
+`UpdateCostsStage`/`UpdatePayoutStage` — новые стадии, вставлены после
+`GenerateTokenStage`, до `ExecuteActionStage` (совпадает с реальным
+относительным порядком в легаси). Payout (CPC-офферы, не auto) отработал
+верно и подтверждён живьём.
+
+**Крупная находка по cost, не гипотеза — воспроизведена и
+изолирована**: в РЕАЛЬНОМ легаси-коде `UpdateCostsStage` cost
+применяется, только если `isCostPerAcquisition()||isCostPerSale()||
+isCostRevShare()` **И** `rawClick->isUniqueCampaign()` — а
+per-unique/CPM/CPC-подветка внутри этого же условия физически
+недостижима (`cost_type` — один скаляр, не может одновременно быть и
+CPA/CPS/RevShare, и CPUC/CPUV). В traffic-core `isUniqueCampaign()`
+пока всегда `false` (per-campaign uniqueness ещё не портирована — Фаза
+9 сделала только сам визитор) — значит **cost прямо сейчас не
+применяется вообще, ни для одного `cost_type`** — задокументированное,
+временное, ожидаемое ограничение, не баг порта. Агент независимо
+подтвердил, что арифметика (traffic_loss, megapush-патч) верна —
+временно переключил `isUniqueCampaign()` на `true`, прогнал тесты
+(traffic_loss корректно даёт `2.5/(1-0.2)=3.125`), затем откатил и
+перепроверил `php -l`.
+
+Verification: hit-limit off-by-one — 2 клика проходят, 3-й блокируется,
+`ZCARD rate:<id>` остаётся `2` (не 3) — счётчик 3-го клика НЕ
+инкрементируется; `per_hour`/`per_day` пороги проверены независимо;
+payout подтверждён (`is_sale=1`, `sale_revenue` из `payout_value`).
+Фикстуры (БД + Redis-ключи) удалены.
+
+### Совместный тест координатора (оба куска + Фазы 9/10 разом)
+
+Один клик через полный пайплайн: реальный `visitor_id`, оффер выбран,
+payout применился (`is_sale=1`, `sale_revenue=3.00` от CPC-оффера) →
+302 на цель. Постбек по тому же `sub_id` с `revenue=15.50` создал
+`conversions`-строку и переписал `clicks.sale_revenue` на 15.50
+(постбек — источник истины поверх payout-оценки, ожидаемо). Фикстуры
+удалены.
+
+**Итого Фазы 11: постбеки и hit-limit/payout закрыты. Cost временно
+неактивен (см. находку выше) до портирования per-campaign uniqueness.**
+
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
 - ~~`local_file`-экшен~~ — портирован Фазой 8 (см. выше). Все 19
@@ -893,16 +987,18 @@ on/off; `DomainRedirectStage` реальный 301 на https. Фикстуры 
   клика по токену для офферов). `SetCookieStage` — НЕ портировано:
   generic-куки/entity-биндинг (sticky лендинг/оффер/стрим)/uniqueness-
   session — см. пункт про визитор/уникальность выше.
-- **`UpdateHitLimitStage`/`UpdateCostsStage`/`UpdatePayoutStage`** —
-  лимиты показов и расчёт cost/payout в реальном времени клика.
+- ~~**`UpdateHitLimitStage`/`UpdatePayoutStage`**~~ — портированы Фазой
+  11, реально работают. `UpdateCostsStage` тоже портирован Фазой 11, но
+  **временно неактивен** — зависит от per-campaign uniqueness (см. её
+  находку выше), не от отсутствия кода.
 - ~~**`DomainRedirectStage`/`CheckPrefetchStage`/`CheckParamAliasesStage`/
   `CheckDefaultCampaignStage`**~~ — все 4 портированы Фазой 10.
 - **Асинхронная запись клика** — legacy кладёт клик в отложенную команду
   (`Component\Clicks\DelayedCommand\AddClickCommand`) вместо синхронного
   INSERT, ради пропускной способности. Здесь INSERT синхронный — ок для
   Фазы 1, пересмотреть при реальной нагрузке.
-- **Постбеки** (`PostbackContext`/`PostbackDispatcher`) — отдельный
-  кластер, не часть click pipeline.
+- ~~**Постбеки**~~ (`PostbackContext`/`PostbackDispatcher`) — портированы
+  Фазой 11 (входящие + исходящие S2S).
 - **`ClickApiContext`, `KtrkContext`, `KClientJSContext`, `RobotsContext`,
   `PingDomainContext`, `UpdateTokensContext`** — альтернативные входные
   точки, не тронуты вообще.

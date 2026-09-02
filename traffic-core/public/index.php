@@ -44,6 +44,22 @@
  * `PipelineRunner` instead of a flat one-pass `foreach` — see
  * `PipelineRunner`'s docblock for the recursion mechanics
  * (`forcedCampaignId` + `LIMIT = 10`, mirrors legacy `Pipeline::_run()`).
+ *
+ * Hit-limit/cost/payout addition: `UpdateHitLimitStage`,
+ * `UpdateCostsStage`, `UpdatePayoutStage` inserted right after
+ * `GenerateTokenStage` and before `ExecuteActionStage` — this matches
+ * legacy's real relative order exactly (see the full stage list above:
+ * `GenerateTokenStage, FindAffiliateNetworkStage, UpdateHitLimitStage,
+ * UpdateCostsStage, UpdatePayoutStage, SaveUniquenessSessionStage,
+ * SetCookieStage, ExecuteActionStage` — `FindAffiliateNetworkStage`/
+ * `SaveUniquenessSessionStage`/`SetCookieStage` remain unported, not
+ * needed for these three). All three only mutate `$payload->rawClick`
+ * (`cost`/`is_sale`/`sale_revenue`), so running them before
+ * `ExecuteActionStage` guarantees the final values are already in
+ * `rawClick` by the time `StoreRawClickStage` builds its INSERT — and
+ * `UpdateHitLimitStage`'s own hit-recording is unconditional at this
+ * point in the pipeline, so it happens regardless of whether the
+ * click's action later redirects successfully.
  */
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -64,6 +80,9 @@ use TrafficCore\Pipeline\ChooseLandingStage;
 use TrafficCore\Pipeline\ChooseOfferStage;
 use TrafficCore\Pipeline\BuildRawClickStage;
 use TrafficCore\Pipeline\GenerateTokenStage;
+use TrafficCore\Pipeline\UpdateHitLimitStage;
+use TrafficCore\Pipeline\UpdateCostsStage;
+use TrafficCore\Pipeline\UpdatePayoutStage;
 use TrafficCore\Pipeline\ExecuteActionStage;
 use TrafficCore\Pipeline\CheckSendingToAnotherCampaign;
 use TrafficCore\Pipeline\StoreRawClickStage;
@@ -87,6 +106,9 @@ $runner = new PipelineRunner([
     new ChooseOfferStage(),
     new BuildRawClickStage(),
     new GenerateTokenStage(),
+    new UpdateHitLimitStage(),
+    new UpdateCostsStage(),
+    new UpdatePayoutStage(),
     new ExecuteActionStage(),
     new CheckSendingToAnotherCampaign(),
     new StoreRawClickStage(),
