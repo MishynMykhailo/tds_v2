@@ -16,30 +16,39 @@ RUN apt-get update -qq \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Adds a real `php-cgi` binary alongside the image's source-built `php`
-# (CLI SAPI) — needed for `traffic-core`'s `local_file` action to run
-# landing-page PHP through an actual CGI SAPI, matching the legacy
-# TDS app's own `Core\Sandbox\CgiExecutor` exactly (see
-# `traffic-core/docs` / `TRAFFIC_CORE_PLAN.md` Phase 8).
+# Adds real `php-cgi` AND `php-fpm` binaries alongside the image's
+# source-built `php` (CLI SAPI), plus the `cgi-fcgi` bridge client
+# (`libfcgi-bin` package) — needed for `traffic-core`'s `local_file`
+# action to run landing-page PHP through an actual CGI/FastCGI SAPI,
+# matching the legacy TDS app's own `Core\Sandbox\CgiExecutor`/
+# `FcgiExecutor` exactly (see `traffic-core/docs` / `TRAFFIC_CORE_PLAN.md`
+# Phases 8 and 16 — 8 added `php-cgi`, 16 adds `php-fpm`+`cgi-fcgi` for
+# the pooled-worker path legacy prefers when available).
 #
-# Debian trixie's own `php8.4-cgi`/`php8.4-common` .deb packages exist in
-# the apt index but have no installable candidate in this image (their
-# `phpapi-*` dependency is satisfied only by Debian's OWN apt-built PHP,
-# which isn't installed here — this image's `php` is compiled from
-# source by the upstream docker-library scripts instead). Building
-# `php-cgi` from that SAME source tree (via `docker-php-source extract`,
-# already used above for ext installation) sidesteps the mismatch
-# entirely and guarantees the resulting `php-cgi` shares the exact same
-# Zend/TSRM ABI as this image's `php` — so the `pdo_mysql`/`pdo_sqlite`/
-# `zip` extensions enabled above for the CLI SAPI load into `php-cgi`
-# unchanged, no separate extension build needed.
+# Debian trixie's own `php8.4-cgi`/`php8.4-fpm`/`php8.4-common` .deb
+# packages exist in the apt index but have no installable candidate in
+# this image (their `phpapi-*` dependency is satisfied only by Debian's
+# OWN apt-built PHP, which isn't installed here — this image's `php` is
+# compiled from source by the upstream docker-library scripts instead).
+# `libfcgi-bin` (`cgi-fcgi`) has NO such problem — it's a plain C library
+# with no PHP-ABI dependency, installs cleanly via apt.
+#
+# Building `php-cgi`+`php-fpm` from that SAME source tree (via
+# `docker-php-source extract`, already used above for ext installation)
+# sidesteps the phpapi mismatch entirely and guarantees both binaries
+# share the exact same Zend/TSRM ABI as this image's `php` — so the
+# `pdo_mysql`/`pdo_sqlite`/`zip` extensions enabled above for the CLI
+# SAPI load into both unchanged, no separate extension build needed.
+# Both SAPIs are enabled in the SAME `./configure`+`make` pass — PHP's
+# build system happily produces `sapi/cgi/php-cgi` and `sapi/fpm/php-fpm`
+# from one build, no need for two separate source extractions/builds.
 #
 # `--build=`/`--with-libdir=` intentionally omitted (unlike the original
 # `php -i`-reported build flags, which hardcode `aarch64-linux-gnu`) so
 # this stays portable across host architectures — autoconf detects the
 # build triple on its own.
 RUN apt-get update -qq \
-    && apt-get install -y -qq libxml2-dev libcurl4-openssl-dev libonig-dev libreadline-dev libsodium-dev libargon2-dev pkg-config re2c bison >/dev/null \
+    && apt-get install -y -qq libxml2-dev libcurl4-openssl-dev libonig-dev libreadline-dev libsodium-dev libargon2-dev libfcgi-bin pkg-config re2c bison >/dev/null \
     && docker-php-source extract \
     && cd /usr/src/php \
     && ./configure \
@@ -52,9 +61,10 @@ RUN apt-get update -qq \
         --with-password-argon2 --with-sodium=shared \
         --with-pdo-sqlite=/usr --with-sqlite3=/usr \
         --with-curl --with-iconv --with-openssl --with-readline --with-zlib \
-        --enable-cgi --disable-cli --disable-phpdbg \
-    && make -j"$(nproc)" cgi \
+        --enable-cgi --enable-fpm --disable-cli --disable-phpdbg \
+    && make -j"$(nproc)" cgi fpm \
     && cp sapi/cgi/php-cgi /usr/local/bin/php-cgi \
+    && cp sapi/fpm/php-fpm /usr/local/bin/php-fpm \
     && cd / && docker-php-source delete \
     && apt-get purge -y -qq pkg-config re2c bison >/dev/null \
     && apt-get clean \

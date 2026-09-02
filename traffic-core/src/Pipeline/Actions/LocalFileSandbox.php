@@ -13,20 +13,44 @@ use TrafficCore\Db;
  * application/Core/Sandbox/Sandbox.php,
  * application/Core/Sandbox/CgiExecutor/CgiExecutor.php).
  *
- * Full technical parity with legacy's execution engine: a real `php-cgi`
- * binary, spawned via `proc_open` with the exact same placeholder `$env`
- * legacy's `Sandbox::execute()` uses (`REDIRECT_STATUS`/
- * `SCRIPT_FILENAME`/`REQUEST_METHOD`/`REMOTE_ADDR`/`CONTENT_LENGTH`),
- * talking the real CGI wire protocol (headers, blank line, body) — see
- * `bin/execute_local_file.php` for the receiving side. `php-cgi` isn't
- * available as a Debian package in this project's `tds2-php-dev` image
- * (see `deploy/Dockerfile.dev-php`'s comment for exactly why) so it's
- * built there from the same PHP source tree as the image's `php` CLI
- * SAPI — same Zend/TSRM ABI, so `pdo_mysql`/`pdo_sqlite`/etc. load into
- * it unchanged. Binary location: `PHP_CGI_BINARY` env if set, else the
+ * Full technical parity with legacy's execution engine, both tiers:
+ * `SandboxFactory::create()` (application/Core/Sandbox/SandboxFactory/
+ * SandboxFactory.php) prefers a pooled FastCGI worker
+ * (`FcgiExecutor`/`cgi-fcgi -bind -connect <socket>`) when one is
+ * reachable, falling back to spawning a fresh `php-cgi` per request
+ * (`CgiExecutor`) otherwise. Phase 16 ports the FCGI tier: if
+ * `PHP_FPM_HOST` is set and a pool is actually reachable there (checked
+ * live via a short `fsockopen`, not just "the env var exists" — matches
+ * legacy's `FcgiExecutor::isAvailable()` doing a real filesystem check
+ * on its Unix-socket path, not just trusting config), requests go
+ * through `cgi-fcgi` to that persistent pool (`deploy/
+ * php-fpm-local-file-pool.conf` + `docker-compose.yml`'s
+ * `traffic-core-php-fpm` service) instead of paying process-spawn cost
+ * per landing hit. Falls back to the Phase 8 per-process `php-cgi` path
+ * automatically and silently otherwise — this class's public interface
+ * doesn't change either way.
+ *
+ * Both tiers talk the same real CGI wire protocol (headers, blank line,
+ * body) — see `bin/execute_local_file.php` for the receiving side, and
+ * `deploy/Dockerfile.dev-php`'s comment for why `php-cgi`/`php-fpm`
+ * aren't installable as Debian packages here and are built from the
+ * same PHP source tree as the image's `php` CLI SAPI instead (same
+ * Zend/TSRM ABI, so `pdo_mysql`/`pdo_sqlite`/etc. load into both
+ * unchanged). CGI binary location: `PHP_CGI_BINARY` env if set, else the
  * same search legacy's `CgiExecutor::_findCGIBinary()` does (`/usr/bin/`,
  * `dirname(getenv('PHP_BINARY'))`, `PHP_BINDIR`, trying
  * `php\<major><minor>-cgi` then `php-cgi` in each).
+ *
+ * **Hardening trade-off, FCGI tier vs. CGI tier (documented, not
+ * accidental)**: the CGI tier's `disable_functions`/`open_basedir` are
+ * passed per-request via `-d` flags to a fresh process, scoped to the
+ * CURRENT landing's own folder. A shared FPM pool can't accept
+ * per-request `-d` overrides through `cgi-fcgi` (a protocol bridge, not
+ * a process this class controls) — the pool's `open_basedir` is
+ * therefore a STATIC setting scoped to the whole landings storage root,
+ * not the current request's specific folder (see the pool conf's own
+ * comment). Still strictly better than legacy (hardens neither tier at
+ * all); just less granular on the pooled path.
  *
  * Storage path mirrors `backend/`'s `App\Services\LocalFileService::
  * getStoragePath()` (`base_path($lpDir)`) exactly — same physical
@@ -107,11 +131,6 @@ class LocalFileSandbox
      */
     public function execute(string $indexFilePath, \Psr\Http\Message\ServerRequestInterface $request, array $rawClick): array
     {
-        $cgiBinary = $this->findCgiBinary();
-        if ($cgiBinary === null) {
-            return [500, [], 'Internal error: php-cgi binary not found'];
-        }
-
         $body = $request->getParsedBody();
         $params = [
             'server' => $request->getServerParams(),
@@ -145,6 +164,20 @@ class LocalFileSandbox
             'CONTENT_TYPE' => 'application/x-www-form-urlencoded',
         ] + (getenv() ?: []);
 
+        $fcgiConnection = $this->findFcgiConnection();
+        $cgiFcgiBinary = $fcgiConnection !== null ? $this->findCgiFcgiBinary() : null;
+
+        if ($fcgiConnection !== null && $cgiFcgiBinary !== null) {
+            $command = [$cgiFcgiBinary, '-bind', '-connect', $fcgiConnection];
+
+            return $this->runProcess($command, $env, $input, $this->phpTimeout());
+        }
+
+        $cgiBinary = $this->findCgiBinary();
+        if ($cgiBinary === null) {
+            return [500, [], 'Internal error: neither a reachable php-fpm pool nor a php-cgi binary was found'];
+        }
+
         $command = [
             $cgiBinary,
             '-d', 'disable_functions=' . self::DISABLED_FUNCTIONS,
@@ -152,6 +185,54 @@ class LocalFileSandbox
         ];
 
         return $this->runProcess($command, $env, $input, $this->phpTimeout());
+    }
+
+    /**
+     * `PHP_FPM_HOST`/`PHP_FPM_PORT` env-configured (default port 9070,
+     * matching `deploy/docker-compose.yml`'s `traffic-core-php-fpm`
+     * service and `deploy/php-fpm-local-file-pool.conf`'s `listen`
+     * directive) — but only used if a real, live connection actually
+     * succeeds (a short `fsockopen`, immediately closed — this is a
+     * liveness probe, not the request itself). Mirrors legacy's
+     * `FcgiExecutor::isAvailable()` checking the real Unix-socket file
+     * rather than trusting config alone; TCP has no filesystem
+     * equivalent to stat, so an actual connect attempt is the closest
+     * honest equivalent. Returns null (silently, not an error) if
+     * `PHP_FPM_HOST` is unset or the pool isn't reachable — `execute()`
+     * falls back to the per-process CGI tier either way.
+     */
+    private function findFcgiConnection(): ?string
+    {
+        $host = getenv('PHP_FPM_HOST');
+        if (!$host) {
+            return null;
+        }
+
+        $port = (int) (getenv('PHP_FPM_PORT') ?: 9070);
+
+        $socket = @fsockopen($host, $port, $errno, $errstr, 0.3);
+        if ($socket === false) {
+            return null;
+        }
+        fclose($socket);
+
+        return "{$host}:{$port}";
+    }
+
+    private function findCgiFcgiBinary(): ?string
+    {
+        $override = getenv('CGI_FCGI_BINARY');
+        if ($override && is_executable($override)) {
+            return $override;
+        }
+
+        foreach (['/usr/bin/cgi-fcgi', '/usr/local/bin/cgi-fcgi'] as $path) {
+            if (is_executable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     private function findCgiBinary(): ?string

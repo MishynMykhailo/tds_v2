@@ -52,5 +52,35 @@ services:
       - redis
     restart: unless-stopped
 
+  # Phase 16 — persistent php-fpm pool for the `local_file` action's
+  # PHP execution, preferred over spawning a fresh `php-cgi` per request
+  # (Phase 8's tier, `LocalFileSandbox` falls back to it automatically if
+  # this pool isn't reachable). Same opt-in pattern as
+  # `traffic-core-worker`: `docker compose --profile fpm up`.
+  #
+  # IMPORTANT: whatever process actually runs `traffic-core/public/
+  # index.php` must mount the SAME landings folder at the SAME absolute
+  # path this container uses (`/landings` here) — `cgi-fcgi` only
+  # forwards a `SCRIPT_FILENAME` string over the wire, this container
+  # opens that path on ITS OWN filesystem, not the caller's. In a real
+  # (non-per-service-container) deployment both sides share one host
+  # filesystem and this is a non-issue; it only matters for this
+  # Docker-Compose-per-service dev setup. Set `PHP_FPM_HOST=traffic-core-
+  # php-fpm PHP_FPM_PORT=9070` (matching `listen` in the pool conf below)
+  # on whatever runs `index.php` to actually use this pool.
+  traffic-core-php-fpm:
+    image: tds2-php-dev:latest
+    container_name: tds2-traffic-core-php-fpm
+    profiles: ["fpm"]
+    working_dir: /app
+    volumes:
+      - ../traffic-core:/app
+      - ../backend/lander:/landings
+      - ./php-fpm-local-file-pool.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+    ports:
+      - "9070:9070"
+    command: ["php-fpm", "-F", "-y", "/usr/local/etc/php-fpm.d/www.conf"]
+    restart: unless-stopped
+
 volumes:
   tds2_mysql_data:
