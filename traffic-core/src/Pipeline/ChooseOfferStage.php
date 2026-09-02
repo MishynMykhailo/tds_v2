@@ -16,21 +16,23 @@ use TrafficCore\Uniqueness\EntityBindingService;
  * otherwise pick an offer via `LandingOfferRotator` over
  * `stream_offer_associations`, set `payload.offerId`.
  *
- * **Deliberate deviation from legacy** (documented in
- * docs/TRAFFIC_CORE_PLAN.md Phase 3 and docs/PORTING_LOG.md — not a bug):
- * real `ChooseOfferStage` does NOT set `actionType`/`actionPayload` from
- * the chosen offer directly. It sets `needToken=true`, and the actual
- * redirect happens later via a JWT-token two-step flow
- * (`GenerateTokenStage` + the `GatewayRedirectContext` second hop found
- * during Phase 1 — see docs/TRAFFIC_CORE_PLAN.md) gated behind
- * `isForceRedirectOffer` (default false, so legacy's default behavior
- * here is actually to NOT set an action from the offer at all). Since
- * that token flow is not implemented in traffic-core at all, replicating
- * the gate literally would mean a pure `schema=offers` stream (no
- * landings configured) picks an offer that never redirects anywhere —
- * useless for this proof of concept. So this port sets
- * `actionType`/`actionPayload`/`actionOptions` from the offer
- * unconditionally instead of gating on `isForceRedirectOffer`.
+ * **CORRECTED (2026-08-29, see docs/PORTING_LOG.md — this was originally
+ * mis-documented as a deliberate deviation, it is not one):** setting
+ * `actionType`/`actionPayload` from the offer directly, unconditionally,
+ * IS the faithful 1:1 port for this flow. `isForceRedirectOffer` is not
+ * a global default — it's a per-entry-point flag each dispatcher sets
+ * when constructing its `Payload`. `Traffic\Dispatcher\ClickDispatcher`
+ * (the plain tracking-link click — exactly what this pipeline models)
+ * constructs its `Payload` with `force_redirect_offer => true`
+ * UNCONDITIONALLY (confirmed by reading `ClickDispatcher.php` directly),
+ * so legacy's real behavior in THIS flow also sets the action from the
+ * offer directly — no token/JWT step. The `needToken`/
+ * `isForceRedirectOffer=false` two-step flow is real, but it belongs to
+ * OTHER entry points: `ClickApiContext`/`KtrkContext` (ported Phase 17,
+ * still without the JWT/cookie redirect step — see `ClickApiSignalStage`/
+ * `docs/PORTING_LOG.md` Phase 17 for that documented, separate gap) and
+ * `LandingOfferContext` (also Phase 17 — reads the offer chosen by THIS
+ * class via `payload->forcedOfferId`, not via a token-redirect hop).
  *
  * Phase 13: sticky-offer binding is now real — see
  * `LandingOfferRotator`'s own docblock.
@@ -107,9 +109,9 @@ class ChooseOfferStage
 
         $payload->offerId = (int) $offer['id'];
 
-        // See class docblock: deviation from legacy's needToken/
-        // isForceRedirectOffer gate — token flow isn't implemented, so we
-        // redirect directly from the offer's own action.
+        // See class docblock: this IS legacy's real behavior for the plain
+        // click flow (ClickDispatcher forces force_redirect_offer=true
+        // unconditionally), not a deviation from it.
         $payload->actionType = $offer['action_type'];
         $payload->actionPayload = $offer['action_payload'];
         $payload->actionOptions = $offer['action_options'] ?? null;
