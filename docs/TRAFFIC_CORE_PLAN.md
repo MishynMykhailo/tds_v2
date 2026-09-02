@@ -495,15 +495,86 @@ A: `campaign`→B, C: `campaign`→сама себя (само-луп), все �
 изменённых файлах.
 
 Итого действий: 16 (Фаза 5) + `campaign`/`group` = 17 из 19 реальных
-ключей репозитория. Осталось: `double_meta`, `local_file` — оба всё ещё
-заблокированы отдельной, ещё не портированной инфраструктурой (см.
-`ExecuteActionStage`'s докблок и список "Осознанно отложено" ниже).
+ключей репозитория. Осталось: `double_meta`, `local_file`.
+
+## traffic-core — Фаза 7 (double_meta-экшен) — 2026-09-02
+
+**Исправлена собственная ошибка координатора из Фазы 5/6**: `double_meta`
+был записан как заблокированный тем же кластером, что и `campaign`
+(`GenerateTokenStage`/`LpTokenService`/`GatewayRedirectContext`). При
+реальном чтении обоих классов это оказалось неверно — `GenerateTokenStage`
+принадлежит СОВСЕМ другому, несвязанному токен-флоу (двухшаговый
+трекинг атрибуции офферов, `isTokenNeeded()`/TTL/UUID-хранилище в
+Redis/etc — то, что реально отложено и остаётся отложенным). `double_meta`
+использует из `LpTokenService` только один статический метод,
+`generateUserKey()` = `hash("sha256", SALT) . $postfix` — не связан с
+хранилищем/TTL вообще. Единственное, что реально требовалось —
+JWT-библиотека и маленький принимающий endpoint. Урок: при повторной
+оценке "заблокировано инфраструктурой X" — перечитать реальный код,
+а не доверять прошлой оценке этой же сессии буквально.
+
+Портировано: `Traffic\Actions\Predefined\DoubleMeta` →
+`TrafficCore\Pipeline\Actions\DoubleMeta` (extends `AbstractAction`, как
+`Meta`/`Frame`/etc — три ветки `executeDefault`/`executeForFrame`/
+`executeForScript`, каждая строит один и тот же подписанный gateway-URL,
+отличаясь только оберткой `RedirectService`). `LpTokenKey::
+generateUserKey()` (`src/LpToken/LpTokenKey.php`) — SALT здесь НОВЫЙ
+секрет для tds_v2 (`JWT_SALT` env, dev-фоллбек), не обязан совпадать с
+легаси — токены double_meta никогда не покидают traffic-core (кодируются
+и декодируются им же). `public/gateway.php` — новый второй
+HTTP-entry-point (порт `Traffic\Dispatcher\GatewayRedirectDispatcher` +
+`GatewayRedirectContext`), декодирует JWT ключом, зависящим от
+User-Agent запроса, и отдаёт то же самое meta-refresh+JS HTML, что и
+легаси `_code()` буквально. `firebase/php-jwt` `^7.1` добавлен в
+`traffic-core/composer.json` (уже зависимость легаси-приложения;
+проверен на Packagist перед установкой — официальный `googleapis/php-jwt`
+преемник, BSD-3-Clause, без security advisories).
+
+**Операционная находка про dev-сервер**: `php -S host:port -t public`
+БЕЗ явного router-скрипта (в отличие от Фаз 1-6, которые всегда
+запускали `... -t public public/index.php`) нужен, когда в `public/`
+больше одного entry-point — со явным router-скриптом ВСЕ запросы (включая
+`/gateway.php`) шли бы через `index.php`. Без router PHP built-in server
+резолвит `/gateway.php` напрямую в файл (и `/`/`index.php` — через
+дефолтный document, как обычный веб-сервер) — использовать этот вариант
+запуска для любого будущего entry-point'а тоже (легаси-паттерн: несколько
+плоских `.php`-файлов в корне, не единый front controller).
+
+**НЕ изменено, буквальный порт легаси-поведения**: `_getGatewayBaseUrl()`
+строит URL БЕЗ порта (`scheme://host/gateway.php`, порт отброшен и в
+легаси `stripHostWww()`, и здесь) — корректно для продакшена (80/443
+подразумеваются схемой), но означает, что построенный gateway-URL в
+DEV-окружении на нестандартном порту (сейчас все тесты идут на 8099-8100)
+технически указывает не туда — не баг порта, а унаследованное свойство,
+подтверждённое чтением легаси-кода; для верификации URL порта
+подставлялся вручную в curl.
+
+Verification (Docker, `tds2-php-dev`, `deploy_default`, порт 8100, dev-сервер
+БЕЗ router-скрипта, кампания `tc7-dm` + один стрим, `JWT_SALT` задан явно):
+(1) обычный клик → `200`, тело — `metaRedirect()` на `/gateway.php?frm=dm&
+token=<jwt>`; (2) переход по этому URL (порт подставлен вручную) с ТЕМ ЖЕ
+`User-Agent` → `200`, тело — редирект-HTML на реальный финальный URL из
+токена; (3) тот же токен с ДРУГИМ `User-Agent` → `400` (ключ зависит от UA
+— подделать/переиспользовать чужой токен нельзя); (4) без `token` вовсе →
+`500`; (5) `frm=script`/`frm=frame` — правильные (неперепутанные, см. Фазу
+5) ветки `executeForScript`/`executeForFrame`, оба со своим gateway-URL;
+(6) регрессия — переключение того же стрима на `do_nothing` по-прежнему
+`200` без ошибок. Фикстуры удалены после. `php -l` чисто на всех новых/
+изменённых файлах.
+
+Итого действий: 18 из 19 реальных ключей. Осталось только `local_file`
+(см. "Осознанно отложено" ниже — реально большой, security-чувствительный
+кластер, НЕ похожий по объёму на `double_meta`/`campaign`, оценка
+подтверждена повторным чтением `PageWrapper.php`/`LocalFileService.php`
+в эту же сессию: CGI/FastCGI PHP-sandbox executor + `MacrosProcessor` +
+HTML-rewriting, ни один из которых не портирован нигде в traffic-core).
 
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
-- **`double_meta`/`local_file`-экшены** — см. Фаза 5 выше для точных
-  причин (JWT/gateway-токен-флоу; отдельный security-чувствительный
-  рантайм-движок раздачи файлов лендинга соответственно).
+- **`local_file`-экшен** — отдельный security-чувствительный CGI/FastCGI
+  PHP-sandbox рантайм-движок раздачи файлов лендинга (`PageWrapper`),
+  см. Фазу 7 выше. (`double_meta` портирован Фазой 7 — был в этом списке
+  ошибочно, см. её "Исправлена собственная ошибка координатора".)
 - **Визитор/уникальность** (`Component\Clicks\Model\Visitor`,
   `SaveUniquenessSessionStage`, `UpdateStreamUniquenessSessionStage`,
   `UpdateCampaignUniquenessSessionStage`, Redis-биндинг визиторов) —

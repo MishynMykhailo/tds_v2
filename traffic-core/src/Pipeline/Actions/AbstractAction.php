@@ -8,9 +8,8 @@ use TrafficCore\Pipeline\Payload;
  * Base for the "context-switching" action types — those whose legacy
  * `_execute()` is just `$this->_executeInContext();` (application/Traffic/
  * Actions/AbstractAction.php): BlankReferrer, Frame, Iframe, Js,
- * JsForIframe, JsForScript, Meta, Remote, ShowHtml, ShowText (DoubleMeta
- * too, but that action is separately deferred — needs JWT/gateway infra,
- * see docs/TRAFFIC_CORE_PLAN.md). `Curl`, `DoNothing`, `FormSubmit`,
+ * JsForIframe, JsForScript, Meta, Remote, ShowHtml, ShowText, DoubleMeta.
+ * `Curl`, `DoNothing`, `FormSubmit`,
  * `Status404`, `SubId` do NOT extend this — legacy's `_execute()` for
  * those bypasses `_executeInContext()` entirely, they implement
  * `ActionHandler` directly instead.

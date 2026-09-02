@@ -7,6 +7,7 @@ use TrafficCore\Pipeline\Actions\BlankReferrer;
 use TrafficCore\Pipeline\Actions\CampaignAction;
 use TrafficCore\Pipeline\Actions\Curl;
 use TrafficCore\Pipeline\Actions\DoNothing;
+use TrafficCore\Pipeline\Actions\DoubleMeta;
 use TrafficCore\Pipeline\Actions\Frame;
 use TrafficCore\Pipeline\Actions\FormSubmit;
 use TrafficCore\Pipeline\Actions\Iframe;
@@ -48,11 +49,15 @@ use TrafficCore\Pipeline\Actions\SubId;
  * mirroring legacy exactly) plus `CheckSendingToAnotherCampaign` and
  * `PipelineRunner` for the actual recursive re-run.
  *
+ * `double_meta` also ported (Phase 7) — see `DoubleMeta`, `LpTokenKey`,
+ * and `public/gateway.php`. Correcting an earlier note in this docblock:
+ * it does NOT need `GenerateTokenStage`/`LpTokenService`'s TTL/storage
+ * machinery — that's an unrelated token flow (offer-redirect two-step
+ * tracking attribution). `double_meta`'s own JWT usage
+ * (`LpTokenService::generateUserKey()` + `Firebase\JWT\JWT`) is
+ * self-contained and needed nothing but a small receiving endpoint.
+ *
  * Deliberately still NOT implemented (501, visible not silent):
- *  - `double_meta` — needs the JWT/gateway-token flow
- *    (`GenerateTokenStage`/`LpTokenService`/`GatewayRedirectContext`),
- *    itself a separately-deferred cluster; porting `double_meta` without
- *    it would mean shipping a broken two-step redirect, not a working one.
  *  - `local_file` — needs `Component\Landings\LocalFile\PageWrapper`, the
  *    RUNTIME landing-page file-serving/PHP-execution engine (distinct from
  *    the already-ported Editor/Cleaner ADMIN file-management CRUD) — a
@@ -69,6 +74,7 @@ class ExecuteActionStage
         'group' => CampaignAction::class,
         'curl' => Curl::class,
         'do_nothing' => DoNothing::class,
+        'double_meta' => DoubleMeta::class,
         'formsubmit' => FormSubmit::class,
         'frame' => Frame::class,
         'iframe' => Iframe::class,
@@ -99,7 +105,7 @@ class ExecuteActionStage
 
         $handlerClass = self::REGISTRY[$payload->actionType] ?? null;
         if ($handlerClass === null) {
-            $payload->abort(501, "Action type \"{$payload->actionType}\" not implemented in traffic-core yet (double_meta/local_file are deliberately deferred, see this class's docblock)");
+            $payload->abort(501, "Action type \"{$payload->actionType}\" not implemented in traffic-core yet (local_file is deliberately deferred, see this class's docblock)");
             return $payload;
         }
 

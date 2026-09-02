@@ -794,5 +794,50 @@ Verification: живые curl-тесты (Docker, порт 8099, три фикс
 удалены из dev-БД после проверки. `php -l` чисто на всех новых/
 изменённых файлах.
 
+## traffic-core — Фаза 7 (double_meta-экшен) — 2026-09-02
+
+Портирован `double_meta` — последний из двух оставшихся 501-экшенов,
+кроме `local_file`. Полная детализация — `docs/TRAFFIC_CORE_PLAN.md`
+Фаза 7. Кратко: предыдущая оценка ("заблокирован тем же кластером, что и
+`campaign`" — `GenerateTokenStage`/`LpTokenService`) была ОШИБОЧНОЙ,
+исправлена при повторном чтении реального кода в эту сессию —
+`GenerateTokenStage` принадлежит несвязанному токен-флоу (двухшаговая
+атрибуция офферов), `double_meta` использует из `LpTokenService` только
+`generateUserKey()`, самодостаточный статический метод. Реально нужно
+было: JWT-библиотека (`firebase/php-jwt` `^7.1`, проверен на Packagist
+перед установкой — легаси уже использует этот же пакет, без advisories)
++ маленький принимающий endpoint (`public/gateway.php`, порт
+`GatewayRedirectDispatcher`).
+
+Новое: `TrafficCore\Pipeline\Actions\DoubleMeta` (extends
+`AbstractAction`, как `Meta`), `TrafficCore\LpToken\LpTokenKey`
+(`generateUserKey()`, SALT — новый `JWT_SALT` env-секрет для tds_v2, не
+обязан совпадать с легаси), `traffic-core/public/gateway.php` (второй
+HTTP-entry-point).
+
+**Операционная находка**: для двух entry-point'ов в `public/` дев-сервер
+нужно поднимать БЕЗ явного router-скрипта (`php -S host:port -t public`,
+не `... -t public public/index.php` как в Фазах 1-6) — иначе весь трафик
+(включая `/gateway.php`) шёл бы через `index.php`.
+
+**Буквальный перенос легаси-поведения (не баг)**: gateway-URL строится
+без порта (`stripHostWww()` тоже его отбрасывает) — верно для
+продакшена (порт подразумевается схемой 80/443), но требует ручной
+подстановки порта при dev-верификации на нестандартном порту.
+
+Verification: живые curl-тесты (Docker, порт 8100, кампания `tc7-dm` +
+один стрим, `JWT_SALT` задан явно) — обычный клик → meta-refresh на
+gateway-URL с JWT; переход по gateway-URL с тем же UA → редирект на
+реальный финальный URL; тот же токен с ДРУГИМ UA → `400` (ключ
+привязан к UA); без `token` → `500`; `frm=script`/`frm=frame` — верные
+(неперепутанные) ветки; регрессия — переключение на `do_nothing`
+по-прежнему работает. Фикстуры удалены. `php -l` чисто.
+
+Итого: 18 из 19 реальных ключей `action_type` портировано. Осталось
+только `local_file` — подтверждено повторным чтением
+`PageWrapper.php`/`LocalFileService.php` в эту сессию, что оценка
+"большой отдельный кластер" верна (CGI/FastCGI PHP-sandbox executor +
+`MacrosProcessor` + HTML-rewriting — ни один компонент не портирован).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
