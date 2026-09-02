@@ -990,5 +990,47 @@ Redis-ключ создан с верным TTL. Фикстуры (БД + Redis)
 `country` в `FilterEngine` теперь можно подключить по-настоящему —
 реальные гео-данные есть, раньше он был fail-open за неимением данных.
 
+## traffic-core — Фаза 10 (периферийные стадии + полный BuildRawClickStage) — 2026-09-02
+
+`DomainRedirectStage`/`CheckPrefetchStage`/`CheckDefaultCampaignStage`/
+`CheckParamAliasesStage` — все 4 портированы (не 3, `CheckParamAliasesStage`
+не отложен: без него `BuildRawClickStage`'s расширение было бы
+бессмысленным). `FindCampaignStage` больше не 404'ит сам на промахе —
+делегирует `CheckDefaultCampaignStage`, 1-в-1 как в легаси.
+
+`CheckParamAliasesStage` архитектурно адаптирован: пишет в новое
+`payload->resolvedParams` вместо мутации частично собранного `RawClick`
+(которого у нас как отдельного мутабельного объекта нет —
+`BuildRawClickStage` строит всё за один проход). `BuildRawClickStage`
+проверяет `resolvedParams` раньше сырых параметров запроса для каждого
+алиасируемого поля.
+
+Полный `BuildRawClickStage`: referrer/source/se_referrer/search_engine/
+x_requested_with/keyword/cost/ad_campaign_id/creative_id/external_id/
+landing_id-через-`lp_id`/15×sub_id/10×extra_param — через `ref_*`-словари
+(переиспользован `DictionaryRepository` из Фазы 9, whitelist расширен,
+не задублирован). Добавлена одна пропущенная миграция — `ref_sub_ids`
+(была упущена в исходном батче `2025_01_01_000017_...`).
+
+**Реальный баг, найден живым тестом**: `clicks.source_id`/`referrer_id`
+— единственные `NOT NULL` среди всех новых FK-полей. Клик без реферера
+→ `PDOException: Column 'referrer_id' cannot be null`. Исправлено `?? 0`
+fallback для этих двух конкретных полей.
+
+`StoreRawClickStage` теперь строит INSERT динамически из
+`array_keys($payload->rawClick)` (35 полей) вместо ручного списка.
+
+Verification: campaign-alias (`?kw=`→`keyword` через
+`campaigns.parameters`), settings-alias (`?utm_source=`→`source` через
+`source_aliases`), прямые параметры, регрессия на голом клике,
+`CheckDefaultCampaignStage` все 3 ветки (кампания-фолбэк через
+recursion, redirect, честный 404), `CheckPrefetchStage` on/off,
+`DomainRedirectStage` реальный 301. Фикстуры удалены. `php -l` чисто.
+
+НЕ портировано, с причиной: `language`/`currency` (нет колонок на
+`clicks` в этой схеме вообще), keyword-из-referrer через
+`ReferrerParserService` (нужна база паттернов поисковиков), bot/proxy-
+детекция (отдельные кластеры).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

@@ -49,6 +49,18 @@ class DictionaryRepository
         'ref_connection_types',
         'ref_operators',
         'ref_isp',
+        // Click-level dictionaries (BuildRawClickStage), added when this
+        // class was reused beyond visitor resolution — same generic
+        // find-or-create fits both, no need for a second class.
+        'ref_sources',
+        'ref_referrers',
+        'ref_search_engines',
+        'ref_keywords',
+        'ref_ad_campaign_ids',
+        'ref_x_requested_with',
+        'ref_creative_ids',
+        'ref_external_ids',
+        'ref_sub_ids',
     ];
 
     /**

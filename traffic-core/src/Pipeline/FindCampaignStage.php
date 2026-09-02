@@ -20,6 +20,14 @@ use TrafficCore\Db;
  * keys, "any query param key is a possible alias" fallback, campaign
  * caching (`CachedCampaignRepository`).
  *
+ * When no campaign resolves (alias/domain-default both miss), this stage
+ * no longer 404s directly — it leaves `payload->campaign` null and
+ * returns, matching legacy's real `FindCampaignStage::process()` (which
+ * also just `return $payload;`s on a miss) so `CheckDefaultCampaignStage`
+ * (runs right after) can apply the admin-configured fallback (redirect
+ * to a specific campaign, a fixed URL, or a real 404) instead of always
+ * hard-coding 404.
+ *
  * Campaign-recursion addition: when `payload->forcedCampaignId` is set
  * (by `CheckSendingToAnotherCampaign` on a `campaign`/`group` action,
  * consumed here by `PipelineRunner`'s re-run), resolve by that id
@@ -73,12 +81,9 @@ class FindCampaignStage
             }
         }
 
-        if (!$campaign) {
-            $payload->abort(404, 'Campaign not found');
-            return $payload;
+        if ($campaign) {
+            $payload->campaign = $campaign;
         }
-
-        $payload->campaign = $campaign;
 
         return $payload;
     }

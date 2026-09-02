@@ -792,13 +792,75 @@ action_type=http напрямую) → Redis остаётся пустым (не
 Redis-ключ создан с корректным TTL — все три подтверждены одним
 запросом. Фикстуры удалены (БД + Redis).
 
-Итого Фазы 9: 2 из ~6 оставшихся крупных кластеров закрыты. Осталось:
-hit-limit/cost/payout в реальном времени, постбеки, альтернативные
-входные точки (`ClickApiContext`/`KClientJSContext`/etc.), периферийные
-стадии пайплайна (`DomainRedirectStage`/`CheckPrefetchStage`/etc.),
-`processMacros()`, асинхронная запись клика, FCGI/php-fpm пул для
-`local_file` (см. ниже — не критично, даже сам легаси-прод его не
-использует).
+Итого Фазы 9: 2 из ~6 оставшихся крупных кластеров закрыты. Осталось на
+момент конца Фазы 9: hit-limit/cost/payout, постбеки, альтернативные
+входные точки, периферийные стадии, `processMacros()`, асинхронная
+запись клика, FCGI/php-fpm пул для `local_file`.
+
+## traffic-core — Фаза 10 (периферийные стадии + полный BuildRawClickStage) — 2026-09-02
+
+3 из 4 периферийных стадий реализованы: `DomainRedirectStage` (форсит
+схему по `domains.redirect` — значение колонки как строка "not"/"http"/
+"https", подтверждено косвенно: `DomainsController.php`'s API-маппинг
+`ssl_redirect = (redirect === "https")`, прямого чтения легаси-геттера
+`getSSLRedirect()` не нашлось, задокументировано как вывод, не факт),
+`CheckPrefetchStage` (буквальный порт — 3 заголовка + `version`+
+`prefetch`-параметры, настройка `ingore_prefetch` — легаси-опечатка в
+ключе сохранена намеренно), `CheckDefaultCampaignStage` (3 ветки —
+редирект на кампанию через уже существующий `forcedCampaignId`+
+`PipelineRunner`-механизм, редирект на фиксированный URL, честный 404 —
+все три живьём проверены). Для этого `FindCampaignStage` перестал сам
+404'ить при отсутствии кампании — теперь просто оставляет
+`payload->campaign = null` и передаёт решение `CheckDefaultCampaignStage`
+(1-в-1 как в легаси — тот тоже не 404'ит сам, `return $payload;` на
+промахе).
+
+**`CheckParamAliasesStage` — 4-й, реализован ПОЛНОСТЬЮ, а не отложен**:
+глобальные алиасы через настройку `<param>_aliases` (список через
+запятую) и алиасы/плейсхолдеры per-кампания через `campaigns.parameters`
+(JSON), плюс `site` → `source`. Архитектурная адаптация (не урезание):
+легаси мутирует уже частично собранный `RawClick` на месте, здесь
+`BuildRawClickStage` строится ЗА ОДИН ПРОХОД — вместо этого стадия
+пишет в новое `payload->resolvedParams`, которое `BuildRawClickStage`
+проверяет ПЕРЕД параметрами запроса для каждого алиасируемого поля.
+
+**Это разблокировало полный `BuildRawClickStage`** (было: только 8
+базовых полей + визитор/гео из Фазы 9). Теперь резолвятся:
+referrer/source/se_referrer/search_engine/x_requested_with/keyword/
+cost/ad_campaign_id/creative_id/external_id/landing_id-через-`lp_id`,
+15×sub_id, 10×extra_param — через уже существующие `ref_*`-словари
+(источники field-словарей были частично созданы ещё в
+`2025_01_01_000017_...` миграции для admin-CRUD; добавлена одна новая —
+`ref_sub_ids`, миграция `000030`, была пропущена в исходном батче).
+Переиспользован `Pipeline\Visitor\DictionaryRepository` (написан
+GeoDb-агентом Фазы 9) — просто расширен whitelist таблиц, не
+задублирован класс. НЕ портировано: `language`/`currency` — у `clicks`
+в этой схеме вообще нет таких колонок (подтверждено `DESCRIBE`, не
+пробел порта — сам источник данных отсутствует); поиск ключевого слова
+из referrer через паттерны поисковиков (`ReferrerParserService`) — нужна
+отдельная база паттернов, вне скоупа; бот/прокси-детекция — отдельные
+уже отложенные кластеры.
+
+**Реальный баг, найден живым тестом, не гипотетический**: `clicks.
+source_id`/`referrer_id` — единственные из всех новых полей `NOT NULL`
+колонки (все остальные новые FK — nullable). Клик без реферера ->
+`PDOException: SQLSTATE[23000]... Column 'referrer_id' cannot be null`.
+Исправлено — `?? 0` fallback именно для этих двух полей (0 — сентинел
+"не резолвлено", словарные id всегда начинаются с 1, коллизий нет).
+
+`StoreRawClickStage` переписан на динамический список колонок из
+`array_keys($payload->rawClick)` вместо ручного перечисления — теперь
+35 полей, дальше расти будет само.
+
+Verification: живые тесты — алиас через `campaigns.parameters`
+(`?kw=` → `keyword`), алиас через глобальную настройку
+(`?utm_source=` → `source` при `source_aliases=utm_source`), прямые
+параметры (`sub_id_1`/`extra_param_1`/`cost`/`ad_campaign_id`) — все
+резолвлены в правильные `ref_*`-строки; регрессия — обычный клик без
+доп. параметров по-прежнему работает (`0`/`NULL` на своих местах, не
+падает); `CheckDefaultCampaignStage` все 3 ветки; `CheckPrefetchStage`
+on/off; `DomainRedirectStage` реальный 301 на https. Фикстуры удалены.
+`php -l` чисто.
 
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
@@ -817,24 +879,24 @@ hit-limit/cost/payout в реальном времени, постбеки, ал
   стрима для одного визитора, часть `SetCookieStage`, которая целиком
   НЕ портирована — см. её докблок в легаси, там же uniqueness-cookie
   логика).
-- **`BuildRawClickStage` — остальные 14 из 15 подшагов**: язык,
-  referrer/se_referrer/keyword/search_engine, sub_id_1..15,
-  extra_param_1..10, cost/currency, **GeoDb IP-резолвинг** (`source_id`/
-  `referrer_id`/`search_engine_id`/`keyword_id` и т.д. — все словарные
-  FK, сейчас всегда 0), device-инфо, **bot-детекция**
-  (`Component\BotDetection\Service\UserBotListService` — Botlist уже
-  портирован в `backend/` как админ-CRUD, а не как рантайм-проверка),
-  proxy-детекция. Это отдельный большой кластер сам по себе (GeoDb-файлы
-  ещё не портированы вообще, см. `docs/PORTING_LOG.md`).
-- **`GenerateTokenStage`/`SetCookieStage`** — JWT-токены и куки для
-  привязки визитора/двухшагового редиректа (`LpTokenService`) — нужны,
-  чтобы `GatewayRedirectContext` вообще имело смысл портировать.
+- ~~**`BuildRawClickStage` — остальные подшаги**~~ — портировано Фазой 9
+  (GeoDb/device/визитор) + Фазой 10 (referrer/source/se_referrer/
+  keyword/search_engine/x_requested_with/cost/sub_ids/extra_params/
+  ad_campaign_id/creative_id/external_id). Реально осталось: `language`/
+  `currency` (у `clicks` в этой схеме нет таких колонок вообще — не
+  пробел порта, негде хранить), поиск ключевого слова из referrer через
+  паттерны поисковиков (`ReferrerParserService` — нужна отдельная база
+  паттернов), bot/proxy-детекция (`UserBotListService`/`ProxyService` —
+  Botlist уже портирован в `backend/` как админ-CRUD, не как рантайм-
+  проверка).
+- ~~**`GenerateTokenStage`**~~ — портировано Фазой 9 (Redis-хранилище
+  клика по токену для офферов). `SetCookieStage` — НЕ портировано:
+  generic-куки/entity-биндинг (sticky лендинг/оффер/стрим)/uniqueness-
+  session — см. пункт про визитор/уникальность выше.
 - **`UpdateHitLimitStage`/`UpdateCostsStage`/`UpdatePayoutStage`** —
   лимиты показов и расчёт cost/payout в реальном времени клика.
-- **`DomainRedirectStage`/`CheckPrefetchStage`/`CheckParamAliasesStage`/
-  `CheckDefaultCampaignStage`** — периферийные стадии основного пайплайна,
-  не влияющие на "происходит ли редирект и пишется ли клик", отложены как
-  наименее приоритетные для proof-of-concept.
+- ~~**`DomainRedirectStage`/`CheckPrefetchStage`/`CheckParamAliasesStage`/
+  `CheckDefaultCampaignStage`**~~ — все 4 портированы Фазой 10.
 - **Асинхронная запись клика** — legacy кладёт клик в отложенную команду
   (`Component\Clicks\DelayedCommand\AddClickCommand`) вместо синхронного
   INSERT, ради пропускной способности. Здесь INSERT синхронный — ок для

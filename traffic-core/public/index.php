@@ -52,9 +52,13 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7Server\ServerRequestCreator;
 use TrafficCore\Pipeline\Payload;
 use TrafficCore\Pipeline\PipelineRunner;
+use TrafficCore\Pipeline\DomainRedirectStage;
+use TrafficCore\Pipeline\CheckPrefetchStage;
 use TrafficCore\Pipeline\CaptureSignalStage;
 use TrafficCore\Pipeline\ResolveVisitorStage;
 use TrafficCore\Pipeline\FindCampaignStage;
+use TrafficCore\Pipeline\CheckDefaultCampaignStage;
+use TrafficCore\Pipeline\CheckParamAliasesStage;
 use TrafficCore\Pipeline\ChooseStreamStage;
 use TrafficCore\Pipeline\ChooseLandingStage;
 use TrafficCore\Pipeline\ChooseOfferStage;
@@ -71,9 +75,13 @@ $request = $creator->fromGlobals();
 $payload = new Payload($request);
 
 $runner = new PipelineRunner([
+    new DomainRedirectStage(),
+    new CheckPrefetchStage(),
     new CaptureSignalStage(),
     new ResolveVisitorStage(),
     new FindCampaignStage(),
+    new CheckDefaultCampaignStage(),
+    new CheckParamAliasesStage(),
     new ChooseStreamStage(),
     new ChooseLandingStage(),
     new ChooseOfferStage(),

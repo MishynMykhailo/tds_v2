@@ -13,7 +13,14 @@ use TrafficCore\Db;
  *
  * Ported: a synchronous raw PDO INSERT into the existing `clicks` table
  * (backend/database/migrations/2025_01_01_000018_create_clicks_table.php)
- * — every column not set here keeps its schema DEFAULT.
+ * — every column not set here keeps its schema DEFAULT. Column list is
+ * built from `array_keys($payload->rawClick)` rather than hand-written
+ * (35 fields as of `BuildRawClickStage`'s full port — source_id/
+ * referrer_id/search_engine_id/keyword_id/ad_campaign_id_id/
+ * x_requested_with_id/creative_id_id/external_id_id/15 sub_id_N_id/10
+ * extra_param_N, plus the original 8) — safe because `rawClick`'s keys
+ * are always this project's own fixed literal field names, never
+ * request-controlled strings.
  *
  * NOT ported: legacy's `collect_clicks` stream flag / `disable_stats`
  * setting checks (both gate whether a click is stored at all), and the
@@ -30,11 +37,12 @@ class StoreRawClickStage
             return $payload;
         }
 
-        $pdo = Db::instance();
-        $stmt = $pdo->prepare(
-            'INSERT INTO clicks (visitor_id, sub_id, datetime, campaign_id, parent_campaign_id, stream_id, landing_id, offer_id, source_id, referrer_id)
-             VALUES (:visitor_id, :sub_id, :datetime, :campaign_id, :parent_campaign_id, :stream_id, :landing_id, :offer_id, :source_id, :referrer_id)'
-        );
+        $columns = array_keys($payload->rawClick);
+        $placeholders = array_map(static fn (string $c): string => ':' . $c, $columns);
+
+        $sql = 'INSERT INTO clicks (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $placeholders) . ')';
+
+        $stmt = Db::instance()->prepare($sql);
         $stmt->execute($payload->rawClick);
 
         return $payload;

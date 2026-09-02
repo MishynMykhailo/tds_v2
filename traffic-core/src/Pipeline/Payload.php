@@ -70,6 +70,17 @@ class Payload
      */
     public ?string $lookupToken = null;
 
+    /**
+     * Canonical-name overrides from `CheckParamAliasesStage` (e.g. a
+     * campaign configured `keyword`'s alias as `kw` — a request with
+     * `?kw=foo` lands here as `['keyword' => 'foo']`). `BuildRawClickStage`
+     * consults this before falling back to the request's own query/body
+     * params for every aliasable field.
+     *
+     * @var array<string,string>
+     */
+    public array $resolvedParams = [];
+
     public function __construct(\Psr\Http\Message\ServerRequestInterface $request)
     {
         $this->request = $request;
