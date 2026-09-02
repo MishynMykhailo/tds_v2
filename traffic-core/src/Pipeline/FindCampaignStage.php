@@ -19,12 +19,35 @@ use TrafficCore\Db;
  * `allow_by_id` numeric-id fallback, `ParameterRepository` custom alias
  * keys, "any query param key is a possible alias" fallback, campaign
  * caching (`CachedCampaignRepository`).
+ *
+ * Campaign-recursion addition: when `payload->forcedCampaignId` is set
+ * (by `CheckSendingToAnotherCampaign` on a `campaign`/`group` action,
+ * consumed here by `PipelineRunner`'s re-run), resolve by that id
+ * directly and skip alias/domain resolution entirely — mirrors legacy's
+ * `_preparePayloadForCampaign()` re-entering `FindCampaignStage` with a
+ * fresh `RawClick` but the target campaign already decided.
  */
 class FindCampaignStage
 {
     public function process(Payload $payload): Payload
     {
         $pdo = Db::instance();
+
+        if ($payload->forcedCampaignId !== null) {
+            $stmt = $pdo->prepare("SELECT * FROM campaigns WHERE id = ? AND state = 'active' LIMIT 1");
+            $stmt->execute([$payload->forcedCampaignId]);
+            $campaign = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
+            $payload->forcedCampaignId = null;
+
+            if (!$campaign) {
+                $payload->abort(404, 'Forced campaign not found');
+                return $payload;
+            }
+
+            $payload->campaign = $campaign;
+            return $payload;
+        }
+
         $params = $payload->request->getQueryParams();
 
         $campaign = null;

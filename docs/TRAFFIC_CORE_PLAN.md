@@ -422,9 +422,9 @@ PageWrapper` (рантайм `local_file`-экшена, см. ниже), а не
   подсистема, заслуживающая отдельной сессии.
 
 Итого: 15 портировано в этой Фазе + `http` (Фаза 1) = 16 из 19
-реальных ключей репозитория (`campaign`/`group`-алиас, `double_meta`,
-`local_file` — всё ещё 501, с явной причиной каждого в докблоке
-`ExecuteActionStage`).
+реальных ключей репозитория (`campaign`/`group`-алиас портирован Фазой 6
+ниже; `double_meta`/`local_file` — всё ещё 501, с явной причиной каждого
+в докблоке `ExecuteActionStage`).
 
 **Verification** (Docker, `tds2-php-dev`, `deploy_default`, порт 8099,
 кампания `actiontest1` + один стрим, `action_type`/`action_payload`
@@ -440,6 +440,64 @@ PageWrapper` (рантайм `local_file`-экшена, см. ниже), а не
 302 на раскодированный URL, второй запрос отдан из файлового кеша
 (`.link`-файл подтверждён на диске). `php -l` без ошибок на всех новых
 файлах.
+
+## traffic-core — Фаза 6 (campaign/group-экшен, рекурсия пайплайна) — 2026-09-02
+
+Портирован последний из трёх заблокированных экшенов, который был
+блокирован НЕ инфраструктурой (в отличие от `double_meta`/`local_file`),
+а просто отсутствием рекурсивного раннера. Прочитаны буквально
+`Traffic\Pipeline\Pipeline::_run()`/`_preparePayloadForCampaign()`,
+`Traffic\Pipeline\Stage\CheckSendingToAnotherCampaign`,
+`Traffic\Actions\Predefined\ToCampaign` (application/Traffic/...).
+
+Новое: `Payload::$forcedCampaignId`/`$parentCampaignId`;
+`CampaignAction` (`src/Pipeline/Actions/`, no-op — мирроринг `ToCampaign::
+_execute()`, который тоже ничего не делает с ответом, только лог);
+`CheckSendingToAnotherCampaign` (новая стадия, ставит `forcedCampaignId`
+и абортит, если `actionType IN ('campaign','group')` — `group` не
+отдельный тип, а алиас `campaign` в легаси
+`StreamActionRepository::alias("group","campaign")`, подтверждено
+чтением); `PipelineRunner` (`src/Pipeline/PipelineRunner.php`) — заменил
+плоский `foreach` в `public/index.php`, реализует цикл повторного
+прогона всего списка стадий с `LIMIT=10` (буквально как легаси
+`Pipeline::LIMIT`), сбрасывает `campaign/stream/landingId/offerId/
+actionType/actionPayload/actionOptions/signal` перед каждым повтором.
+
+**Отличие от легаси, документированное, не случайное**: легаси при
+превышении лимита рекурсии бросает `StageException` ("makes infinite
+recursion") ДО какого-либо ответа клиенту; здесь вместо этого
+завершается ответом `508 Loop Detected` с телом-объяснением — легаси не
+имеет HTTP-эквивалента (падает раньше), выбор `508` осознан (реальный,
+применимый HTTP-статус для этого случая), не буквальный порт "throw".
+
+**Не перенесено**: `parentSubId` (`RawClick::setParentSubId()`) — в
+схеме `clicks` таблицы tds_v2 нет колонки `parent_sub_id` (проверено по
+миграции), перенесён только `parent_campaign_id` (реальная колонка,
+была неиспользуемой до этой Фазы). `forcedStreamId`-сброс тоже
+пропущен — в traffic-core нет вообще forced-stream-id функциональности.
+
+`FindCampaignStage` расширен: если `forcedCampaignId` установлен —
+резолвит кампанию напрямую по `id` (не по alias/domain), минуя обычный
+путь, и потребляет (обнуляет) флаг. `BuildRawClickStage`/
+`StoreRawClickStage` теперь пишут `clicks.parent_campaign_id`.
+
+**Verification** (Docker, `tds2-php-dev`, `deploy_default`, порт 8099,
+три фикстурные кампании в `tds2` dev-БД — B: финальный `http`-редирект,
+A: `campaign`→B, C: `campaign`→сама себя (само-луп), все удалены после):
+(1) `?campaign=tc5-campA` → 302 на финальный URL кампании B, `clicks`
+запись — `campaign_id=B`, `parent_campaign_id=A`, `stream_id=`B-стрим
+(рекурсия реально проходит через `FindCampaignStage`→...→
+`ExecuteActionStage` второй раз); (2) `?campaign=tc5-campC` (само-луп)
+→ `508` за 47мс (10 итераций, не зависает, не превращается в
+бесконечный цикл); (3) регрессия — прямой `?campaign=tc5-campB` (без
+рекурсии) по-прежнему 302, `parent_campaign_id=NULL` в `clicks` (не
+"утекает" из статики/предыдущего теста). `php -l` чисто на всех новых/
+изменённых файлах.
+
+Итого действий: 16 (Фаза 5) + `campaign`/`group` = 17 из 19 реальных
+ключей репозитория. Осталось: `double_meta`, `local_file` — оба всё ещё
+заблокированы отдельной, ещё не портированной инфраструктурой (см.
+`ExecuteActionStage`'s докблок и список "Осознанно отложено" ниже).
 
 ## Осознанно отложено (следующие фазы, каждая — отдельная спланированная сессия)
 
@@ -465,8 +523,6 @@ PageWrapper` (рантайм `local_file`-экшена, см. ниже), а не
   чтобы `GatewayRedirectContext` вообще имело смысл портировать.
 - **`UpdateHitLimitStage`/`UpdateCostsStage`/`UpdatePayoutStage`** —
   лимиты показов и расчёт cost/payout в реальном времени клика.
-- **`CheckSendingToAnotherCampaign`/`ToCampaign`-экшен** — рекурсивный
-  редирект между кампаниями (`Pipeline::_preparePayloadForCampaign()`).
 - **`DomainRedirectStage`/`CheckPrefetchStage`/`CheckParamAliasesStage`/
   `CheckDefaultCampaignStage`** — периферийные стадии основного пайплайна,
   не влияющие на "происходит ли редирект и пишется ли клик", отложены как

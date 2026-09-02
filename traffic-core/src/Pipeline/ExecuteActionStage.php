@@ -4,6 +4,7 @@ namespace TrafficCore\Pipeline;
 
 use TrafficCore\Pipeline\Actions\ActionHandler;
 use TrafficCore\Pipeline\Actions\BlankReferrer;
+use TrafficCore\Pipeline\Actions\CampaignAction;
 use TrafficCore\Pipeline\Actions\Curl;
 use TrafficCore\Pipeline\Actions\DoNothing;
 use TrafficCore\Pipeline\Actions\Frame;
@@ -42,13 +43,12 @@ use TrafficCore\Pipeline\Actions\SubId;
  * `{sub_id_1}`/`{source_id}` are not substituted. Documented once here,
  * not repeated in each class.
  *
+ * `campaign`/`group` (`Traffic\Actions\Predefined\ToCampaign`) ported
+ * separately — see `CampaignAction` (this stage's handler, a no-op
+ * mirroring legacy exactly) plus `CheckSendingToAnotherCampaign` and
+ * `PipelineRunner` for the actual recursive re-run.
+ *
  * Deliberately still NOT implemented (501, visible not silent):
- *  - `campaign` (`Traffic\Actions\Predefined\ToCampaign`) — needs
- *    recursive pipeline re-run via `forced_campaign_id`
- *    (`Pipeline::_preparePayloadForCampaign()`), a distinct, larger piece
- *    of infra than the other action types — always called out as its own
- *    separate item in docs/TRAFFIC_CORE_PLAN.md's deferred list, not
- *    lumped in with "the small ones".
  *  - `double_meta` — needs the JWT/gateway-token flow
  *    (`GenerateTokenStage`/`LpTokenService`/`GatewayRedirectContext`),
  *    itself a separately-deferred cluster; porting `double_meta` without
@@ -65,6 +65,8 @@ class ExecuteActionStage
     /** @var array<string,class-string<ActionHandler>> */
     private const REGISTRY = [
         'blank_referrer' => BlankReferrer::class,
+        'campaign' => CampaignAction::class,
+        'group' => CampaignAction::class,
         'curl' => Curl::class,
         'do_nothing' => DoNothing::class,
         'formsubmit' => FormSubmit::class,
@@ -97,7 +99,7 @@ class ExecuteActionStage
 
         $handlerClass = self::REGISTRY[$payload->actionType] ?? null;
         if ($handlerClass === null) {
-            $payload->abort(501, "Action type \"{$payload->actionType}\" not implemented in traffic-core yet (campaign/double_meta/local_file are deliberately deferred, see this class's docblock)");
+            $payload->abort(501, "Action type \"{$payload->actionType}\" not implemented in traffic-core yet (double_meta/local_file are deliberately deferred, see this class's docblock)");
             return $payload;
         }
 

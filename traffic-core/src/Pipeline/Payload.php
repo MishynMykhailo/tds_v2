@@ -32,6 +32,15 @@ class Payload
     public ?int $landingId = null;
     public ?int $offerId = null;
 
+    /**
+     * Campaign-recursion fields (`campaign`/`group` action type) — see
+     * `CheckSendingToAnotherCampaign` and `PipelineRunner`. Mirrors
+     * legacy `Payload::getForcedCampaignId()`/`RawClick::
+     * setParentCampaignId()` (application/Traffic/Pipeline/Payload.php).
+     */
+    public ?int $forcedCampaignId = null;
+    public ?int $parentCampaignId = null;
+
     /** @var array<string,mixed> Phase 4 — see Signal::fromRequest(). Populated by CaptureSignalStage. */
     public array $signal = [];
 

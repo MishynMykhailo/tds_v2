@@ -15,7 +15,10 @@ namespace TrafficCore\Pipeline;
  * honest placeholder values, not real tracking data. Phase 3 adds
  * landing_id/offer_id from `ChooseLandingStage`/`ChooseOfferStage`
  * (both nullable, both null when the stream's schema isn't
- * landings/offers).
+ * landings/offers). Campaign-recursion adds `parent_campaign_id`
+ * (`clicks` has this column for real, unlike `parent_sub_id` — see
+ * `PipelineRunner`'s docblock) from `payload->parentCampaignId`, set by
+ * `PipelineRunner::prepareForCampaign()` on a `campaign`/`group` hop.
  *
  * NOT ported (see docs/TRAFFIC_CORE_PLAN.md): visitor resolution
  * (`Component\Clicks\Model\Visitor` — here a random id is generated,
@@ -33,6 +36,7 @@ class BuildRawClickStage
             'sub_id' => bin2hex(random_bytes(16)),
             'datetime' => gmdate('Y-m-d H:i:s'),
             'campaign_id' => $payload->campaign['id'],
+            'parent_campaign_id' => $payload->parentCampaignId,
             'stream_id' => $payload->stream['id'] ?? null,
             'landing_id' => $payload->landingId,
             'offer_id' => $payload->offerId,

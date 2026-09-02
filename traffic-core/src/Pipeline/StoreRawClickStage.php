@@ -32,8 +32,8 @@ class StoreRawClickStage
 
         $pdo = Db::instance();
         $stmt = $pdo->prepare(
-            'INSERT INTO clicks (visitor_id, sub_id, datetime, campaign_id, stream_id, landing_id, offer_id, source_id, referrer_id)
-             VALUES (:visitor_id, :sub_id, :datetime, :campaign_id, :stream_id, :landing_id, :offer_id, :source_id, :referrer_id)'
+            'INSERT INTO clicks (visitor_id, sub_id, datetime, campaign_id, parent_campaign_id, stream_id, landing_id, offer_id, source_id, referrer_id)
+             VALUES (:visitor_id, :sub_id, :datetime, :campaign_id, :parent_campaign_id, :stream_id, :landing_id, :offer_id, :source_id, :referrer_id)'
         );
         $stmt->execute($payload->rawClick);
 

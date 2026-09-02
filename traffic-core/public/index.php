@@ -37,6 +37,13 @@
  * `landing_id`/`offer_id` in a single INSERT. Once real per-request
  * fields (IP/UA/referrer) are ported this whole ordering should be
  * revisited to match legacy's.
+ *
+ * Campaign-recursion addition: `CheckSendingToAnotherCampaign` now runs
+ * after `ExecuteActionStage` (same position as legacy's
+ * `firstLevelStages()`), and the whole stage list is driven by
+ * `PipelineRunner` instead of a flat one-pass `foreach` — see
+ * `PipelineRunner`'s docblock for the recursion mechanics
+ * (`forcedCampaignId` + `LIMIT = 10`, mirrors legacy `Pipeline::_run()`).
  */
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -44,6 +51,7 @@ require __DIR__ . '/../vendor/autoload.php';
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7Server\ServerRequestCreator;
 use TrafficCore\Pipeline\Payload;
+use TrafficCore\Pipeline\PipelineRunner;
 use TrafficCore\Pipeline\CaptureSignalStage;
 use TrafficCore\Pipeline\FindCampaignStage;
 use TrafficCore\Pipeline\ChooseStreamStage;
@@ -51,6 +59,7 @@ use TrafficCore\Pipeline\ChooseLandingStage;
 use TrafficCore\Pipeline\ChooseOfferStage;
 use TrafficCore\Pipeline\BuildRawClickStage;
 use TrafficCore\Pipeline\ExecuteActionStage;
+use TrafficCore\Pipeline\CheckSendingToAnotherCampaign;
 use TrafficCore\Pipeline\StoreRawClickStage;
 
 $psr17Factory = new Psr17Factory();
@@ -59,7 +68,7 @@ $request = $creator->fromGlobals();
 
 $payload = new Payload($request);
 
-$stages = [
+$runner = new PipelineRunner([
     new CaptureSignalStage(),
     new FindCampaignStage(),
     new ChooseStreamStage(),
@@ -67,15 +76,11 @@ $stages = [
     new ChooseOfferStage(),
     new BuildRawClickStage(),
     new ExecuteActionStage(),
+    new CheckSendingToAnotherCampaign(),
     new StoreRawClickStage(),
-];
+]);
 
-foreach ($stages as $stage) {
-    $payload = $stage->process($payload);
-    if ($payload->aborted) {
-        break;
-    }
-}
+$payload = $runner->run($payload);
 
 if (!empty(\TrafficCore\Pipeline\CheckFilters::$skipped)) {
     $payload->headers['X-Filters-Skipped'] = implode(',', \TrafficCore\Pipeline\CheckFilters::$skipped);
