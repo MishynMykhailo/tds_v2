@@ -45,7 +45,7 @@ it('returns the current user\'s own data, never the password hash', function () 
     $user = UserFactory::new()->create(['login' => 'selfuser']);
     actingAsForProfile($user);
 
-    $response = $this->getJson(profileEndpoint('index'));
+    $response = $this->getJson(profileEndpoint('show'));
 
     $response->assertStatus(200);
     $data = $response->json();
@@ -57,7 +57,7 @@ it('returns the current user\'s own data, never the password hash', function () 
 it('denies index to a guest with a 403', function () {
     actingAsForProfile(null);
 
-    $response = $this->getJson(profileEndpoint('index'));
+    $response = $this->getJson(profileEndpoint('show'));
 
     $response->assertStatus(403);
 });

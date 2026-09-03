@@ -120,7 +120,7 @@ class UsersController extends Controller
 
     private function notFound(string $message = 'Not found'): Response
     {
-        return response()->json(['error' => $message, 'stacktrace' => ''], 404);
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
     }
 
     private function validationError(array $errors): Response
@@ -130,7 +130,7 @@ class UsersController extends Controller
 
     private function dbError(QueryException $e): Response
     {
-        return response()->json(['error' => $e->getMessage(), 'stacktrace' => ''], 500);
+        return response()->json(['error' => $e->getMessage(), 'stacktrace' => $e->getTraceAsString()], 500);
     }
 
     private function forbidden(string $message = 'Access denied'): Response

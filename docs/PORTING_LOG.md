@@ -1712,4 +1712,67 @@ domains/traffic_sources/affiliate_networks) бэкофилены на 'active'.
 `php -l` чисто на всех изменённых файлах.
 
 ---
+
+## Разбор оставшихся контрактных падений: stacktrace + 3 попутных бага — 2026-09-03
+
+Продолжение предыдущей записи (после фикса `ApiClient` base_uri + `state`-
+дефолта, 40 падений → упало до 21). По запросу пользователя разобрал
+оставшиеся "про stacktrace" падения.
+
+**Корневая причина — реальная, не мнимая.** Проверил легаси
+`Admin\Context\AdminContext::handleException()`: для `NotFoundError`
+(и `ADODB_Exception`) легаси РЕАЛЬНО кладёт настоящий PHP-стектрейс —
+`"stacktrace" => $e->getTraceAsString()`. Это НЕ дебаг-режим-зависимая
+случайность, а буквальный, всегда исполняемый код. При этом весь этот
+Laravel-порт (19 файлов, ~27 мест) хардкодил `'stacktrace' => ''` в
+`notFound()`/`dbError()`-хелперах. Исправлено скриптом (`sed` по всем
+файлам сразу, две устойчивые сигнатуры: `'error' => $message, ...` →
+`(new \Exception($message))->getTraceAsString()`; `'error' =>
+$e->getMessage(), ...` → `$e->getTraceAsString()`) + 3 места вручную
+(литеральные строки в `ConversionsController`/`ObjectDispatchController`
+x2).
+
+**Попутно найдено и исправлено, копая эту причину (3 отдельных реальных
+бага):**
+1. `settings` таблица была практически пустая (1 строка) — легаси
+   `data.sql` сеет 52 дефолтных настройки, ни одна не была
+   портирована в Laravel-сидер. Новый `database/seeders/
+   SettingsSeeder.php` (буквальная копия всех 52 пар), подключён в
+   `DatabaseSeeder`. Разово прогнан `php artisan db:seed
+   --class=SettingsSeeder` на общей dev-БД (НЕ полный `db:seed` —
+   тот бы попытался пересоздать admin-юзера и упал на уникальном
+   `login`).
+2. `ProfileController::indexAction()` — неправильное имя метода.
+   Легаси `Component\Users\Controller\ProfileController` имеет
+   `showAction()`, НЕ `indexAction()` (`?object=profile.index` 404-ит
+   против реального легаси). Переименовано + поправлен свой же
+   `tests/Feature/ProfileTest.php` (тоже использовал `'index'`).
+3. `SettingsController::findAction()` отсутствовал целиком (легаси
+   имеет `find`/`config`/`getAuxiliaryData`/`changeLanguage` кроме
+   уже портированных `index`/`update`) — добавлен `findAction`
+   (`{"key":.., "value":..}`, `value: null` для неизвестного ключа,
+   без isAdmin-гейта, как в легаси).
+4. `ObjectDispatchController`'s `method_exists()`-фолбэк на
+   неизвестный action/controller отдавал голый текст "Not Found"
+   вместо JSON `{error, stacktrace}` — тоже исправлено (тот же коммит,
+   что и общий stacktrace-фикс, поскольку легаси даёт ИМЕННО эту
+   ошибку через `NotFoundError` с реальным `getTraceAsString()`).
+
+Verification: полный `backend/./vendor/bin/pest` — 384/384 без
+изменений. `tests-contract` против нового бэкенда: 40 → 21 → **15**
+оставшихся падений (все 7 "про stacktrace" закрыты; Settings/Profile —
+100%). `php -l` чисто на всех ~20 изменённых файлах.
+
+**Осталось (НЕ разобрано, отдельная причина от stacktrace, не в
+скоупе этого захода)**: `ApiKeysTest` (2), `CampaignsTest`'s legacy-
+fixture smoke test (id=4 — не относится к свежей БД), `DomainsTest`
+(3 — `domains.create` возвращает массив из 23 элементов вместо 1,
+похоже на отдельный баг сериализации создания), `GroupsTest`
+(дубликат имени не отклоняется 406), `UserPreferencesTest` (1),
+`UsersTest` (3 — фикстура `users.create` падает на "new_password
+required", плюс `users.listAsOptions` отсутствует). Следующий шаг —
+разобрать каждое так же, как здесь: живой curl + сверка с реальным
+легаси-источником.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

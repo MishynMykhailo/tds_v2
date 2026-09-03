@@ -125,7 +125,7 @@ class AffiliateNetworksController extends Controller
     /** `Core\Exceptions\NotFoundError` shape: 404, {"error", "stacktrace"}. */
     private function notFound(string $message = 'Not found'): Response
     {
-        return response()->json(['error' => $message, 'stacktrace' => ''], 404);
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
     }
 
     /** `Core\Validator\ValidationError` shape: 406, {field: ["message", ...]}. */
@@ -137,7 +137,7 @@ class AffiliateNetworksController extends Controller
     /** `ADODB_Exception` (DB error) shape: 500, {"error", "stacktrace"}. */
     private function dbError(QueryException $e): Response
     {
-        return response()->json(['error' => $e->getMessage(), 'stacktrace' => ''], 500);
+        return response()->json(['error' => $e->getMessage(), 'stacktrace' => $e->getTraceAsString()], 500);
     }
 
     /** `Core\Exceptions\DenyError` shape: 403, {"error": "..."}. */

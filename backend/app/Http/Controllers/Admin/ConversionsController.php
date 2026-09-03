@@ -241,7 +241,9 @@ class ConversionsController extends Controller
         $currency = $request->input('currency');
 
         if (empty($data) || empty($currency)) {
-            return ResponseFacade::json(['error' => 'Import data or currency is empty', 'stacktrace' => ''], 406);
+            $message = 'Import data or currency is empty';
+
+            return ResponseFacade::json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 406);
         }
 
         return ResponseFacade::json((new ConversionImportService())->import($data));

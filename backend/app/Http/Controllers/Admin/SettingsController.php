@@ -190,6 +190,24 @@ class SettingsController extends Controller
     }
 
     /**
+     * Legacy `findAction()` — `{"key": ..., "value":
+     * CachedSettingsRepository::get($key)}`, `value: null` for an
+     * unknown/missing key (no default applied). No `isAdmin()` gate in
+     * legacy (unlike `indexAction()`) — kept literal, not invented.
+     * Found missing live (2026-09-03, tests-contract/ finally running
+     * against this backend) — see docs/PORTING_LOG.md.
+     */
+    public function findAction(Request $request): Response
+    {
+        $key = (string) $this->param($request, 'key');
+
+        return response()->json([
+            'key' => $key,
+            'value' => Setting::query()->find($key)?->value,
+        ]);
+    }
+
+    /**
      * Legacy has no `isAdmin()` gate on `updateAction()` itself (only the
      * demo-mode check, not ported, and the `isPost()` check below) — the
      * real gate is the controller-level ACL check in

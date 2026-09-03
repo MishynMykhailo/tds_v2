@@ -86,7 +86,7 @@ class ThirdPartyIntegrationController extends Controller
     /** `Core\Exceptions\NotFoundError` shape: 404, {"error", "stacktrace"}. */
     private function notFound(string $message = 'Not found'): Response
     {
-        return response()->json(['error' => $message, 'stacktrace' => ''], 404);
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
     }
 
     // ---------------------------------------------------------------

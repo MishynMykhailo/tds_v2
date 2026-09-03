@@ -15,5 +15,7 @@ class DatabaseSeeder extends Seeder
         User::factory()->admin()->create([
             'login' => 'admin',
         ]);
+
+        $this->call(SettingsSeeder::class);
     }
 }

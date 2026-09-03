@@ -96,7 +96,7 @@ class FavouriteReportController extends Controller
 
     private function notFound(string $message = 'Report is not found'): Response
     {
-        return response()->json(['error' => $message, 'stacktrace' => ''], 404);
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
     }
 
     private function validationError(array $errors): Response

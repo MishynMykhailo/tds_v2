@@ -344,19 +344,32 @@ production install script для системы, которая ещё меня�
 Pest-сьют) + бэкофилл существующих NULL-строк в общей dev-БД. После
 фикса: Landings/Offers полностью зелёные, Domains — частично.
 
-**Остаётся падать (отдельная, НЕ исправленная в этой сессии причина)**:
-несколько тестов ожидают непустой `stacktrace` в error-респонсах
-(`{"error":..., "stacktrace": "..."}`), но многие контроллеры этого
-порта буквально хардкодят `'stacktrace' => ''` (см. `ConversionsController`/
-`CleanerController` и другие) — реальный ли это регресс контракта
-(легаси действительно кладёт непустой stacktrace?) или тест написан по
-неверному предположению — не выяснено, нужен отдельный разбор. Плюс
-несколько "domains.show без id / с несуществующим id — не 404, а 200"
-legacy-quirk-тестов, тоже не разобрано. Полный лог непочиненных
-падений: `/tmp/contract-new-backend-run.log` (эфемерный, не в репо —
-при необходимости перезапустить: `TDS_TEST_TARGET=http://localhost:PORT
-vendor/bin/pest` в `tests-contract/`, бэкенд поднять `php artisan
-serve`).
+**stacktrace-падения — ЗАКРЫТО (2026-09-03, тот же день).** Разобрано:
+легаси `AdminContext::handleException()` РЕАЛЬНО кладёт настоящий
+`$e->getTraceAsString()` в `NotFoundError`/`ADODB_Exception` JSON-
+ответы — не мнимый регресс, а буквальный легаси-контракт. Исправлено
+во всех ~19 контроллерах (27 мест, `'stacktrace' => ''` →
+`(new \Exception($message))->getTraceAsString()` / `$e->getTraceAsString()`).
+Попутно найдены и исправлены ещё 3 реальных бага: (1) `settings`
+таблица была пустая — добавлен `SettingsSeeder` (52 легаси-дефолта),
+(2) `ProfileController::indexAction()` → переименован в `showAction()`
+(легаси не имеет `profile.index` вообще), (3) `SettingsController::
+findAction()` отсутствовал — добавлен. Полная история — `docs/
+PORTING_LOG.md` ("Разбор оставшихся контрактных падений"). Контрактный
+сьют против нового бэкенда: 40 → 15 падений.
+
+**Остаётся падать (15, другая причина — НЕ stacktrace, не разобрано)**:
+`ApiKeysTest` (2), `CampaignsTest`'s legacy-fixture smoke test (id=4 —
+не относится к свежей БД, можно игнорировать/пометить skip),
+`DomainsTest` (3 — `domains.create` возвращает массив из 23 элементов
+вместо 1, плюс id-less/несуществующий-id "не 404, а 200" legacy-quirk),
+`GroupsTest` (дубликат имени не отклоняется 406), `UserPreferencesTest`
+(1), `UsersTest` (3 — фикстура `users.create` падает на "new_password
+required", плюс `users.listAsOptions` отсутствует). Следующий шаг —
+разобрать каждое так же: живой curl + сверка с реальным легаси-
+источником (`tds-app`, порт 8090). Перезапуск: `TDS_TEST_TARGET=http://
+localhost:PORT vendor/bin/pest` в `tests-contract/`, бэкенд —
+`php artisan serve --port=PORT`.
 
 Уже покрыты (документные, теперь и реально работающие против нового
 бэкенда): Auth, Groups, Campaigns, Streams, Offers, Domains,

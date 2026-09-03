@@ -97,7 +97,7 @@ class ProfileController extends Controller
 
     private function dbError(QueryException $e): Response
     {
-        return response()->json(['error' => $e->getMessage(), 'stacktrace' => ''], 500);
+        return response()->json(['error' => $e->getMessage(), 'stacktrace' => $e->getTraceAsString()], 500);
     }
 
     private function forbidden(string $message = 'Access denied'): Response
@@ -136,7 +136,15 @@ class ProfileController extends Controller
     // Actions
     // ---------------------------------------------------------------
 
-    public function indexAction(Request $request): Response
+    /**
+     * Legacy `Component\Users\Controller\ProfileController::showAction()`
+     * — confirmed live (2026-09-03, tests-contract/): this was wrongly
+     * named `indexAction` here, but `?object=profile.index` doesn't
+     * exist in legacy at all (only `.show`/`.update`/`.currentAccess`/
+     * `.languages`/`.timezones`) — `profile.index` 404s against the real
+     * legacy backend. Renamed to match; see docs/PORTING_LOG.md.
+     */
+    public function showAction(Request $request): Response
     {
         $user = $this->currentUserService->get();
         if (! $user) {

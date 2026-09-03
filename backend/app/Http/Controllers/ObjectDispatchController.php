@@ -184,14 +184,27 @@ class ObjectDispatchController extends Controller
         $controllerName = strtolower($controllerName);
 
         if (! isset(self::CONTROLLERS[$controllerName])) {
-            return response('Not Found', 404);
+            $message = "Controller \"{$controllerName}\" is not defined";
+
+            return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
         }
 
         $controllerClass = self::CONTROLLERS[$controllerName];
         $method = $action.'Action';
 
+        // Legacy `AdminDispatcher::_dispatchControllerAction()`: `throw new
+        // \Core\Exceptions\NotFoundError("Controller action \"" .
+        // $actionName . "\" is not defined")` — a real §6 NotFoundError,
+        // {error, stacktrace} JSON + 404 with a REAL (non-empty) stack
+        // trace (`$e->getTraceAsString()` — see `AdminContext::
+        // handleException()`'s `NotFoundError` branch), not a bare-text
+        // 404 and not a fake empty stacktrace. Found live (2026-09-03,
+        // tests-contract/'s `profile.index` test — the first one to
+        // actually assert on this shape) — see docs/PORTING_LOG.md.
         if (! method_exists($controllerClass, $method)) {
-            return response('Not Found', 404);
+            $message = "Controller action \"{$method}\" is not defined";
+
+            return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
         }
 
         $controller = app($controllerClass);
