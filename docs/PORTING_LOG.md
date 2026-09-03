@@ -1381,6 +1381,66 @@ Log`) — реальный `resolveStatus()`-эквивалент в легас�
 
 ---
 
+## Conversions — контрактный тест + 4 реальных бага, включая один системный (range/limit) — 2026-09-03
+
+Третий модуль из очереди backlog 6 (после Labels/GeoProfiles/GeoDb).
+Живая сверка с легаси (порт 8090) нашла 4 реальных бага:
+
+1. `conversions.statuses`: `rebill` отдавался как `"Rebill"` (`ucfirst()`
+   -фоллбэк), реальный легаси-лейбл — `"Upsell"` (подтверждено в
+   `application/Component/Conversions/translations/en.php`). Заменено на
+   хардкод-словарь `STATUS_NAMES`.
+2. `conversions.import`: ошибка "sub_id не найден" ошибочно получала
+   префикс `"sub_id: "` — старый докблок утверждал, что это ветка
+   легаси-`NotFoundError` (с префиксом), но чтение реального
+   `PayloadFactory.php` показало, что там реально бросается
+   `PostbackError` (без префикса), как и для пустого sub_id. Отдельно:
+   отсутствие `data`/`currency` отдавало JSON 406 вместо реального
+   легаси-поведения — обычный `Error` → catch-all → 500, plain text (тот
+   же паттерн, что "Must be post request" в этом кодбейзе).
+3. `ConversionsController` не имел ACL-гейта вообще ни на одном из 5
+   action'ов — легаси гейтит весь контроллер через
+   `isResourceAllowed($user, "conversions")` ДО запуска любого action'а,
+   а "conversions" не входит в дефолтный набор ресурсов обычного
+   пользователя — живой тест подтвердил 403 на каждом action'е. Добавлен
+   тот же гейт + точное сообщение легаси ("You have no permission to
+   access to this page - Conversions", сверено с
+   `AdminRequestFactory.php:50-51`).
+4. **Системная находка**: `QueryParams::hasRangeOrLimit()` существовал,
+   но нигде не вызывался — ВСЕ 7 контроллеров, строящих `QueryParams`
+   (`reports.build`, `conversions.log` и 5 `withStats`-экшенов), молча
+   принимали запрос без `range`/`limit` и гоняли неограниченный запрос,
+   хотя реальный легаси 500-ит ("You must provide \"range\" or
+   \"limit\"") — подтверждено живьём и для `conversions.log`, и для
+   `campaigns.withStats`. Исправлено ОДИН раз в
+   `QueryParams::fromRequest()` — покрывает всех 7 вызывающих
+   контроллеров сразу. Потребовало добавить `limit` в ~26 существующих
+   вызовов в `CampaignsWithStatsTest`/`LandingsWithStatsTest`/
+   `OffersWithStatsTest`/`StreamsWithStatsTest`/
+   `TrafficSourcesWithStatsTest`/`GridAclTest` (они раньше молчаливо
+   полагались на неограниченный запрос) + добавить `AclResource`-грант
+   `conversions` в один `GridAclTest`-кейс, который теперь легитимно
+   упирается в новый гейт из п.3.
+
+Новый `tests-contract/tests/ConversionsTest.php` (11 тестов) — зелёные
+на ОБОИХ таргетах. `tests-contract` (без `smoke`) — **117/117 на ОБОИХ
+таргетах**. `backend/./vendor/bin/pest` — 399/399. `php -l` чисто.
+
+**Побочная находка, НЕ баг**: `reports.build` тоже не имеет
+resource-гейта в порту — но легаси тоже НЕ гейтит его для обычного
+пользователя (`"reports"` — дефолтный ресурс), проверено живьём
+отдельно, прежде чем считать это тем же классом бага, что у Conversions.
+
+**Операционная находка**: легаси-инстанс (порт 8090) имеет rate-limiter
+на `auth.login` ("The limit of login attempts has been exceeded... N
+seconds") — срабатывает при большом числе логинов подряд (полный
+`tests-contract`-прогон делает по логину на тест). HTTP 200 с
+`{"message": "..."}` вместо `{"success": true}` — не 401/429, легко
+спутать с "тест сломан", если не проверить тело ответа. Решение — просто
+подождать (лимит истекает через ~1-2 минуты), не менять ничего в коде.
+
+---
+
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.
 Завершённая история (traffic-core Фазы 1-17) — в `docs/PORTING_LOG_ARCHIVE.md`,
 туда же архивировать записи старше ~2-3 недель/сессий, когда этот файл
