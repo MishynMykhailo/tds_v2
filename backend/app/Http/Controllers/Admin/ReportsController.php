@@ -3,10 +3,13 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Campaign;
+use App\Services\AclService;
 use App\Services\CurrentUserService;
 use App\Services\Grid\GridBuilder;
 use App\Services\Grid\QueryParams;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Compatibility port of the legacy
@@ -19,12 +22,12 @@ use Illuminate\Http\Request;
  * docs/legacy-reference/frontend/api/00_common_routing_auth_acl_errors_grid.md
  * §9.
  *
- * Only `build` (§9.3, "the main report builder") and `definition` are
- * implemented this round, per the task brief. `summary`/`columnsAsOptions`/
- * `parameterAliases`/`statsForCampaign` are other real ReportsController
- * actions in the legacy source but were not asked for this round and are
- * intentionally left unimplemented (ObjectDispatchController 404s them,
- * same as every other not-yet-ported action in this codebase).
+ * `build`/`definition`/`summary`/`columnsAsOptions`/`parameterAliases`/
+ * `statsForCampaign` — the full legacy action set — are implemented (the
+ * last 4 were added 2026-09-03, during a session-wide controller audit
+ * that found them missing: a prior docblock here said they were "not
+ * asked for this round", which was true at the time but had gone stale —
+ * closing them for exhaustive backend/legacy contract parity).
  * `favouriteReport`/`exportedReports`/`labels` are separate `?object=`
  * controllers entirely (FavouriteReportController/ExportedReportsController/
  * LabelsController) and out of scope here regardless.
@@ -32,8 +35,39 @@ use Illuminate\Http\Request;
 class ReportsController extends Controller
 {
     public function __construct(
+        private readonly AclService $aclService,
         private readonly CurrentUserService $currentUserService,
     ) {}
+
+    // ---------------------------------------------------------------
+    // Legacy param-reading / §6 error-shape helpers — duplicated from
+    // CampaignsController per this codebase's established per-controller
+    // convention.
+    // ---------------------------------------------------------------
+
+    private function param(Request $request, string $name, $default = null)
+    {
+        if ($request->query->has($name)) {
+            return $request->query->get($name);
+        }
+
+        $body = $request->request->all();
+        if (array_key_exists($name, $body)) {
+            return $body[$name];
+        }
+
+        return $default;
+    }
+
+    private function notFound(string $message = 'Not found'): Response
+    {
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
+    }
+
+    private function forbidden(string $message = 'Access denied'): Response
+    {
+        return response()->json(['error' => $message], 403);
+    }
 
     /**
      * `reports.build` column/metric whitelist (logical name -> raw SQL
@@ -240,16 +274,27 @@ class ReportsController extends Controller
      */
     public function definitionAction(Request $request): array
     {
+        return [
+            'url' => '?object=reports.build',
+            'details' => null,
+            'range_intervals' => null,
+            'columns' => self::columnDefinitions(),
+        ];
+    }
+
+    /**
+     * The `definitionAction()` column list, extracted so
+     * `columnsAsOptionsAction()` (legacy `GridDefinition::listAsOptions()`)
+     * can reuse the exact same set instead of duplicating it.
+     */
+    private static function columnDefinitions(): array
+    {
         $extraParamColumns = [];
         for ($i = 1; $i <= 10; $i++) {
             $extraParamColumns[] = ['name' => "extra_param_{$i}", 'type' => 'string', 'category' => 'params', 'filter' => ['type' => 'string']];
         }
 
         return [
-            'url' => '?object=reports.build',
-            'details' => null,
-            'range_intervals' => null,
-            'columns' => [
                 ['name' => 'datetime', 'type' => 'datetime', 'sortable' => true, 'formatter' => 'datetime', 'category' => 'data', 'width' => 160],
                 ['name' => 'click_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
                 ['name' => 'visitor_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
@@ -321,7 +366,162 @@ class ReportsController extends Controller
                 ['name' => 'epc', 'type' => 'decimal', 'th_title' => 'grid.epc_th', 'metric' => true, 'sortable' => true, 'summary' => true, 'category' => 'metrics', 'formatter' => 'money', 'fraction_size' => 4, 'width' => 86],
                 ['name' => 'cpc', 'type' => 'decimal', 'th_title' => 'grid.cpc_th', 'metric' => true, 'sortable' => true, 'summary' => true, 'category' => 'metrics', 'formatter' => 'money', 'fraction_size' => 4, 'width' => 70],
                 ['name' => 'cpa', 'type' => 'decimal', 'th_title' => 'grid.cpa_th', 'metric' => true, 'sortable' => true, 'summary' => true, 'category' => 'metrics', 'formatter' => 'money', 'fraction_size' => 4, 'width' => 80],
-            ],
         ];
+    }
+
+    /**
+     * Legacy `reports.summary` -> `ClickRepository::summary()` ->
+     * `GridBuilder::factory(...)->getSummary()` — same pipeline as
+     * `buildAction()`, but only the totals row, always computed regardless
+     * of the request's own `summary` flag (legacy's `summary()` method has
+     * no such flag at all — this endpoint's entire purpose IS the summary).
+     */
+    public function summaryAction(Request $request): array
+    {
+        $params = QueryParams::fromRequest($request);
+        $params->summary = true;
+
+        $builder = new GridBuilder('clicks', self::buildColumns(), $this->currentUserService->get(), self::GEO_DEVICE_JOINS);
+        $result = $builder->build($params);
+
+        return $result['summary'] ?? [];
+    }
+
+    /**
+     * Legacy `reports.columnsAsOptions` -> `GridDefinition::listAsOptions()`
+     * — every non-hidden column as `{category, name, value}` (legacy
+     * translates `category`/`name` via `LocaleService`; this port has no
+     * i18n layer at all, per established precedent elsewhere in this
+     * codebase — `category` is the raw category string, `name` is the
+     * column's own `th_title`/`name` humanized, matching the "hardcode
+     * English, no i18n" convention already used for e.g. Campaigns'
+     * ungrouped-group "Default" fallback).
+     */
+    public function columnsAsOptionsAction(Request $request): array
+    {
+        $options = [];
+
+        foreach (self::columnDefinitions() as $column) {
+            if (! empty($column['hidden'])) {
+                continue;
+            }
+
+            $label = $column['th_title'] ?? $column['name'];
+            $options[] = [
+                'category' => $column['category'] ?? '',
+                'name' => ucfirst(str_replace(['grid.', '_th', '_'], ['', '', ' '], $label)),
+                'value' => $column['name'],
+            ];
+        }
+
+        return $options;
+    }
+
+    /**
+     * Legacy `reports.parameterAliases` ->
+     * `CampaignRepository::getParameterAliases($campaign)` ->
+     * `TrafficSourceService::getAliasForParameter()`. For each of the
+     * campaign's tracking `parameters` (JSON map keyed by e.g.
+     * `sub_id_1`/`extra_param_3`, each optionally carrying an `alias`)
+     * that actually has a non-empty alias set, returns
+     * `{parameter, alias}` with the same `[S1]`/`[X3]` prefix legacy adds
+     * for `sub_id_N`/`extra_param_N` parameter names.
+     */
+    public function parameterAliasesAction(Request $request): Response|array
+    {
+        $campaignId = (int) $this->param($request, 'campaign_id');
+        $campaign = Campaign::find($campaignId);
+
+        if (! $campaign) {
+            return $this->notFound('Campaign not found');
+        }
+
+        if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $campaign)) {
+            return $this->forbidden('You are not allowed to view this campaign');
+        }
+
+        $parameters = $campaign->parameters ?? [];
+        $result = [];
+
+        foreach ($parameters as $name => $data) {
+            $alias = is_array($data) ? ($data['alias'] ?? null) : null;
+            if (empty($alias)) {
+                continue;
+            }
+
+            $prefix = '';
+            if (preg_match('/sub_id_([0-9]+)/', (string) $name, $m)) {
+                $prefix = '[S'.$m[1].'] ';
+            } elseif (preg_match('/extra_param_([0-9]+)/', (string) $name, $m)) {
+                $prefix = '[X'.$m[1].'] ';
+            }
+
+            $result[] = ['parameter' => $name, 'alias' => $prefix.$alias];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Legacy `reports.statsForCampaign` ->
+     * `ReportRepository::briefCampaignStats()` — a fixed report (metrics
+     * clicks/stream_unique_clicks/bots, grouped by stream_id, filtered to
+     * one campaign, over `?range=`) reshaped into an object keyed by
+     * stream_id (legacy uses a `stdClass` with dynamic properties for
+     * exactly this reason — JSON-encodes as `{"3": {...}, "7": {...}}`,
+     * not an array). Empty result -> `{"null": {zeros}}`, matching
+     * legacy's literal `$result->null = [...]` fallback.
+     */
+    public function statsForCampaignAction(Request $request): Response|\stdClass
+    {
+        $campaignId = (int) $this->param($request, 'campaign_id');
+        $campaign = Campaign::find($campaignId);
+
+        if (! $campaign) {
+            return $this->notFound('Campaign not found');
+        }
+
+        if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $campaign)) {
+            return $this->forbidden('You are not allowed to view this campaign');
+        }
+
+        $params = new QueryParams();
+        $params->metrics = ['clicks', 'stream_unique_clicks', 'bots'];
+        $params->grouping = ['stream_id'];
+        // Explicit `columns` (grouping + metrics only, mirroring legacy
+        // `QueryParams::_columns = array_merge($_columns, $_grouping,
+        // $_metrics)` when `columns` itself is omitted) — GridBuilder's
+        // implicit "no columns -> select everything" default would mix
+        // every OTHER raw per-row column into this GROUP BY stream_id
+        // query, none of them functionally dependent on stream_id, which
+        // 500s under real MySQL's ONLY_FULL_GROUP_BY (found live fixing
+        // this same class of bug for reports.build/summary above).
+        $params->columns = ['stream_id', 'clicks', 'stream_unique_clicks', 'bots'];
+        $params->filters = [['name' => 'campaign_id', 'operator' => 'equals', 'expression' => $campaign->id]];
+        $range = $this->param($request, 'range');
+        $params->range = is_array($range) ? $range : null;
+
+        $builder = new GridBuilder('clicks', self::buildColumns(), $this->currentUserService->get(), self::GEO_DEVICE_JOINS);
+        $rows = $builder->build($params)['rows'] ?? [];
+
+        $result = new \stdClass();
+
+        if (empty($rows)) {
+            $result->null = ['clicks' => 0, 'stream_unique_clicks' => 0, 'bots' => 0];
+
+            return $result;
+        }
+
+        foreach ($rows as $row) {
+            if (! empty($row['stream_id'])) {
+                $result->{$row['stream_id']} = [
+                    'clicks' => (int) ($row['clicks'] ?? 0),
+                    'stream_unique_clicks' => (int) ($row['stream_unique_clicks'] ?? 0),
+                    'bots' => (int) ($row['bots'] ?? 0),
+                ];
+            }
+        }
+
+        return $result;
     }
 }

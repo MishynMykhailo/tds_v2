@@ -427,6 +427,42 @@ Cleaner, весь кластер ThirdPartyIntegration/CampaignIntegration (TPI,
 TpiMandatory, Facebook/AppsFlyer-интеграции, CodePresets,
 KClientJsPreset), Macros, Branding, IpInfoDataTypes, Labels.
 
+## 8. Аудит всех ~43 контроллеров (2026-09-03) — найденные и открытые пункты
+
+Систематический живой аудит (admin/non-admin/невалидные параметры,
+сверка с легаси) всех контроллеров `backend/app/Http/Controllers/Admin/`.
+Подробности и живая верификация — `docs/PORTING_LOG.md`.
+
+**Закрыто в этом раунде:**
+- `ReportsController` — не хватало 4 из 6 легаси action'ов
+  (`summary`/`columnsAsOptions`/`parameterAliases`/`statsForCampaign`) —
+  портированы. Попутно найден и исправлен реальный баг в
+  `App\Services\Grid\GridBuilder` (общий с `reports.build`): дефолтный
+  набор колонок при отсутствии явного `columns` смешивал агрегатные и
+  сырые построчные колонки без GROUP BY — 500 на реальном MySQL
+  (`ONLY_FULL_GROUP_BY`), никогда не ловилось SQLite-Pest-сьютом. Легаси
+  не падает только потому, что `Core\Db\Db` безусловно шлёт
+  `SET sql_mode=''` на каждое подключение — осознанно не воспроизведено
+  (реальный footgun, не полезное поведение).
+- Pretty-URL postback (`docs/PORTING_LOG.md`, отдельная запись) —
+  докблок "нет легаси-эквивалента" был неверен, поправлен.
+
+**Осталось (не в этом раунде, следующая сессия):**
+- `EditorController::infoLandingAction` — реальный, используемый легаси
+  action (`application/Component/Editor/Controller/EditorController.php:90`),
+  отсутствует в порте целиком (404 "action not defined" вместо реального
+  бизнес-ответа). Не начато.
+- `AdminApiController` — `adminApi.index` отдаёт JSON-заглушку вместо
+  живой Swagger-UI HTML-страницы легаси; `adminApi.spec` отдаёт 200 с
+  HTML meta-refresh вместо легасевого настоящего 302-редиректа на
+  `https://admin-api.docs.tds.io/openapi.yaml`. Функционально
+  эквивалентно (браузер попадёт туда же), не байт-в-байт контракт —
+  низкий приоритет, тривиальный фикс (`redirect($url, 302)` для `spec`),
+  не начато.
+- Остальные ~40 контроллеров проверены живьём (имена action'ов, базовая
+  форма ответа) — расхождений не найдено, см. полный список
+  "проверено — не найдено" в `docs/PORTING_LOG.md`.
+
 Задача на будущее: (а) разобрать оставшиеся ~7 падений (stacktrace/
 domains-quirk) — вероятно, реальные мелкие расхождения контракта; (б)
 писать контрактные тесты по образцу `BotlistTest.php`/`GroupsTest.php`

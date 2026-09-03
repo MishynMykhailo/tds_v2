@@ -62,8 +62,44 @@ class GridBuilder
             ];
         }
 
+        // REAL BUG, found live against real MySQL (2026-09-03): when the
+        // caller omits `columns` entirely, legacy defaults to ALL columns
+        // (`QueryParams::_columns = array_keys($definition->getColumns())`)
+        // -- including aggregate ones like `clicks` => `COUNT(click_id)` --
+        // mixed with plain per-row columns in one flat, ungrouped SELECT.
+        // That's normally invalid SQL (MySQL's ONLY_FULL_GROUP_BY rejects a
+        // nonaggregated column alongside an aggregate with no GROUP BY) --
+        // legacy gets away with it ONLY because `Core\Db\Db` runs `SET
+        // sql_mode=''` on every connection (application/Core/Db/Db.php:143),
+        // unconditionally disabling ALL strict-mode checks project-wide.
+        // Deliberately NOT replicated here: that setting doesn't just
+        // permit this one query shape, it silently returns an
+        // arbitrary/non-deterministic value for every "nonaggregated"
+        // column in ANY mixed query anywhere the app runs one -- a
+        // correctness footgun, not a real feature, and this Laravel
+        // connection intentionally keeps MySQL's default strict sql_mode.
+        // Instead: when there's no explicit `columns` AND no `grouping`,
+        // the implicit "select everything" default excludes
+        // metric/aggregate columns (SUM(/COUNT() expressions) -- they are
+        // not meaningful per-row without a GROUP BY anyway, and dropping
+        // them from an implicit default keeps the query valid instead of
+        // 500ing. An explicit `columns` list (or `grouping`, forcing a real
+        // GROUP BY) still lets a caller select them, same as before.
         $selectColumns = ! empty($params->columns) ? $params->columns : array_keys($this->columnExpressions);
         $selectColumns = array_values(array_intersect($selectColumns, array_keys($this->columnExpressions)));
+
+        // `buildSummary()` below needs the UNFILTERED list — it does its own
+        // SUM(/COUNT( filtering to decide what to aggregate, so stripping
+        // aggregate columns here first would leave it nothing to sum.
+        $summaryColumns = $selectColumns;
+
+        if (empty($params->columns) && empty($params->grouping)) {
+            $selectColumns = array_values(array_filter(
+                $selectColumns,
+                fn (string $column) => ! str_contains(strtoupper($this->columnExpressions[$column]), 'SUM(')
+                    && ! str_contains(strtoupper($this->columnExpressions[$column]), 'COUNT('),
+            ));
+        }
 
         $query = $this->baseQuery($allowedCampaignIds);
 
@@ -111,7 +147,7 @@ class GridBuilder
 
         $summary = null;
         if ($params->summary) {
-            $summary = $this->buildSummary($selectColumns, $allowedCampaignIds);
+            $summary = $this->buildSummary($summaryColumns, $allowedCampaignIds);
         }
 
         return [
@@ -171,10 +207,21 @@ class GridBuilder
     private function buildSummary(array $columns, string|array $allowedCampaignIds): array
     {
         $query = $this->baseQuery($allowedCampaignIds);
+        $hasAggregate = false;
+
         foreach ($columns as $column) {
             if (str_contains(strtoupper($this->columnExpressions[$column]), 'SUM(') || str_contains(strtoupper($this->columnExpressions[$column]), 'COUNT(')) {
                 $query->selectRaw($this->columnExpressions[$column].' as '.$column);
+                $hasAggregate = true;
             }
+        }
+
+        // No aggregate column in the requested set — a bare `->first()`
+        // here would silently fall back to Laravel's default `SELECT *`
+        // and return one arbitrary raw row, not a summary. Nothing
+        // meaningful to summarize, so return nothing rather than that.
+        if (! $hasAggregate) {
+            return [];
         }
 
         return (array) $query->first();

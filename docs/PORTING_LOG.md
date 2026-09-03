@@ -1965,4 +1965,67 @@ Verification: `backend/./vendor/bin/pest` — 383/383 (было 384: -2 стар
 apiKey id=4, user id=13) удалены после живой сверки.
 
 ---
+
+## ReportsController — 4 недостающих action'а + реальный GridBuilder-баг (только на MySQL) — 2026-09-03
+
+Фоновый аудит всех ~43 контроллеров (см. параллельный отчёт) нашёл, что
+`ReportsController` реализовывал только `build`/`definition` из 6
+легаси action'ов. Портированы `summary`/`columnsAsOptions`/
+`parameterAliases`/`statsForCampaign`:
+- `summaryAction` — тот же `GridBuilder`-пайплайн, что `buildAction`, но
+  только `result['summary']` (форсирует `params->summary = true`,
+  легаси `ClickRepository::summary()` не имеет своего флага вообще).
+- `columnsAsOptionsAction` — колонки `definitionAction()` вынесены в
+  общий `columnDefinitions()`, отфильтрованы нескрытые, замаплены в
+  `{category, name, value}` (без i18n — как везде в этом порте).
+- `parameterAliasesAction`/`statsForCampaignAction` — прямой перенос
+  `CampaignRepository::getParameterAliases()`/
+  `ReportRepository::briefCampaignStats()` на Eloquent (`campaigns.
+  parameters` — уже готовый JSON-столбец), 404/403 на несуществующую/
+  недоступную кампанию по образцу `CampaignsController::showAction()`.
+
+**Реальный баг, найденный при живой проверке summary (не мнимый, не мой
+код — уже существовал в `App\Services\Grid\GridBuilder`, используемом
+`reports.build` тоже):** вызов без явного `columns` (легаси-дефолт —
+"взять все колонки грид-определения", `QueryParams.php:174-175`) мешает
+сырые построчные колонки и агрегатные (`clicks` => `COUNT(click_id)`) в
+одном SELECT без GROUP BY — невалидный SQL по стандарту, реальный MySQL
+(`ONLY_FULL_GROUP_BY`, дефолтный режим MySQL 8) 500-ит: "Expression #1 of
+SELECT list is not in GROUP BY clause...". SQLite-Pest-сьют этого никогда
+не ловил (SQLite такие смешанные SELECT'ы не проверяет). Подтверждено
+живьём: `?object=reports.build` без `columns` на новом бэкенде (порт
+8010, реальный MySQL) — 500; тот же запрос на легаси (порт 8090) —
+200 с реальными данными.
+
+**Разобрана причина расхождения — не "легаси особенный", а `Core\Db\
+Db.php:143` делает `$this->_db->execute("SET sql_mode=''")` НА КАЖДОМ
+подключении, безусловно отключая ONLY_FULL_GROUP_BY (и вообще все
+strict-режимы) для всего легаси-проекта разом.** Осознанно НЕ
+воспроизведено — это не полезная фича, а footgun: пустой sql_mode тихо
+возвращает произвольное (не детерминированное) значение для НЕагрегатных
+колонок в любом смешанном запросе где угодно в приложении, не только в
+этом одном report-эндпоинте. Вместо этого — `GridBuilder::build()`:
+когда `columns` не передан И `grouping` пуст, дефолтный набор колонок
+исключает агрегатные (SUM(/COUNT() выражения — они всё равно
+бессмысленны построчно без GROUP BY, попутно чинит и уже
+существовавший `reports.build` для этого редкого (фронтенд всегда шлёт
+явный `columns`, поэтому ни разу не всплывало) случая. Также нашёл и
+починил тем же заходом: `buildSummary()` при пустом наборе агрегатных
+колонок раньше тихо проваливался в Laravel-дефолт `SELECT *` и отдавал
+одну случайную сырую строку вместо summary — теперь отдаёт `[]`.
+
+Verification: `backend/./vendor/bin/pest` — 383/383 (было 384 до сессии,
+-1 за счёт двух `listAsOptions`-тестов Users в предыдущей записи, здесь
+без изменений). `tests-contract` — 92/92 на новом бэкенде И на легаси
+(не задело ни одного, Reports вне контрактного покрытия). Живая проверка
+на реальном MySQL (`tds2-mysql`): `reports.build` без columns — 200 с
+реальными строками; `reports.summary` — реальные агрегаты (`clicks:130`
+и т.д.), не сырая строка; `reports.statsForCampaign` — реальная кампания
+даёт `{"null":{...}}` (нет кликов под группировкой), несуществующая/
+отсутствующая — 404; `reports.parameterAliases` — реальный alias с
+префиксом `[S1]`/`[X2]` подтверждён на живой фикстуре (`campaigns.
+parameters` JSON), очищено (`UPDATE ... SET parameters=NULL`). `php -l`
+чисто на всех изменённых файлах.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
