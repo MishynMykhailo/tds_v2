@@ -26,11 +26,13 @@ class GridBuilder
     /**
      * @param  string  $table  "clicks" or "conversions"
      * @param  array<string, string>  $columnExpressions  logical column name -> raw SQL expression (whitelist, e.g. ["campaign_id" => "campaign_id", "clicks" => "COUNT(click_id)"])
+     * @param  array<int, array{0: string, 1: string, 2: string, 3: string}>  $joins  optional LEFT JOINs applied to every query this builder runs (main select, total count, summary), e.g. [["visitors", "clicks.visitor_id", "=", "visitors.id"]] — lets $columnExpressions reference columns on the joined tables. Empty by default (single-table, as before this param existed).
      */
     public function __construct(
         private readonly string $table,
         private readonly array $columnExpressions,
         private readonly ?User $user = null,
+        private readonly array $joins = [],
     ) {}
 
     /**
@@ -136,8 +138,12 @@ class GridBuilder
     {
         $query = DB::table($this->table);
 
+        foreach ($this->joins as [$joinTable, $first, $operator, $second]) {
+            $query->leftJoin($joinTable, $first, $operator, $second);
+        }
+
         if ($allowedCampaignIds !== AclService::ALLOW_ANY) {
-            $query->whereIn('campaign_id', $allowedCampaignIds);
+            $query->whereIn($this->table.'.campaign_id', $allowedCampaignIds);
         }
 
         return $query;

@@ -45,20 +45,31 @@ class ReportsController extends Controller
      * columns that actually exist on this Laravel port's `clicks` table
      * (database/migrations/2025_01_01_000018_create_clicks_table.php).
      *
+     * geo/device/isp dimensions (country/region/city/browser/
+     * browser_version/os/os_version/device_type/device_model/isp/operator/
+     * connection_type) ARE included below — see GEO_DEVICE_JOINS + the
+     * `App\Services\Grid\GridBuilder` `$joins` param (added for this).
+     * CORRECTION (2026-09-03): an earlier version of this docblock claimed
+     * these were left out because "a join pattern already exists for
+     * ref_sources/ref_referrers/ref_keywords, just not extended to geo/
+     * device" — that was WRONG, verified by grepping the codebase: no
+     * `GridBuilder` caller had ever joined onto any `ref_*` table before
+     * this round; `GridBuilder` was genuinely single-table only. Fixed by
+     * adding a generic `$joins` param to `GridBuilder` (LEFT JOINs applied
+     * to every query it runs — main select, total count, summary) rather
+     * than special-casing this controller.
+     *
      * NOT included, and why:
-     * - geo/device/browser/ISP/referrer dimensions (country, city, os,
-     *   browser, isp, language, ip, region, user_agent, operator,
-     *   referrer, search_engine, keyword, ad_campaign_id, external_id,
-     *   creative_id, source, x_requested_with, campaign/offer/landing/
-     *   stream/ts NAME columns) — all of these are SQL JOINs onto
-     *   `visitors`/`campaigns`/`offers`/`ref_*` dictionary tables in the
-     *   real schema (ClicksDefinition::initRelations()).
-     *   `App\Services\Grid\GridBuilder` (used as-is per the task brief, not
-     *   modified) only ever queries a single table with no join support,
-     *   so these would be fabricated columns. The raw `*_id` FK columns for
-     *   most of these ARE included below since they're real `clicks`
-     *   columns (country_id/os_id/etc. are NOT, though — those live on
-     *   `visitors`, not `clicks`, so even the FK id isn't on this table).
+     * - referrer/search_engine/keyword/source/ad_campaign_id/external_id/
+     *   creative_id/x_requested_with/destination NAME columns, language,
+     *   ip, user_agent, campaign/offer/landing/stream/ts NAME columns —
+     *   out of scope for this round (task brief only asked for geo/device/
+     *   isp). The raw `*_id` FK columns for these ARE already included
+     *   below (they're real `clicks` columns). `ip`/`user_agent` need a
+     *   MySQL-only unpack function (`INET_NTOA`, packed-int storage) that
+     *   doesn't exist under SQLite (this suite's test driver, see
+     *   `calendar grouping dimensions` note below) — left out for the same
+     *   cross-driver reason as calendar columns, not forgotten.
      * - sub_id_1..15 — real column is `sub_id_N_id` (FK to a dictionary,
      *   not the dereferenced text ReportDefinition exposes under
      *   "sub_id_N") — same single-table/no-join limitation, omitted rather
@@ -79,6 +90,31 @@ class ReportsController extends Controller
      *   (cr/roi/epc/cpc/cpa) IS included below since each is directly
      *   expressible as one aggregate SQL expression.
      */
+    /**
+     * LEFT JOINs feeding the geo/device/isp columns in BUILD_COLUMNS_BASE:
+     * `clicks.visitor_id` -> `visitors` -> each geo/device `ref_*`
+     * dictionary table (see database/migrations/
+     * 2025_01_01_000029_create_visitors_and_geo_device_ref_tables.php for
+     * the schema this mirrors — all FKs on `visitors` are nullable, hence
+     * LEFT not INNER, so a click with no matched visitor row still returns
+     * with null geo/device values instead of being dropped).
+     */
+    private const GEO_DEVICE_JOINS = [
+        ['visitors', 'clicks.visitor_id', '=', 'visitors.id'],
+        ['ref_countries', 'visitors.country_id', '=', 'ref_countries.id'],
+        ['ref_regions', 'visitors.region_id', '=', 'ref_regions.id'],
+        ['ref_cities', 'visitors.city_id', '=', 'ref_cities.id'],
+        ['ref_browsers', 'visitors.browser_id', '=', 'ref_browsers.id'],
+        ['ref_browser_versions', 'visitors.browser_version_id', '=', 'ref_browser_versions.id'],
+        ['ref_os', 'visitors.os_id', '=', 'ref_os.id'],
+        ['ref_os_versions', 'visitors.os_version_id', '=', 'ref_os_versions.id'],
+        ['ref_device_types', 'visitors.device_type_id', '=', 'ref_device_types.id'],
+        ['ref_device_models', 'visitors.device_model_id', '=', 'ref_device_models.id'],
+        ['ref_isp', 'visitors.isp_id', '=', 'ref_isp.id'],
+        ['ref_operators', 'visitors.operator_id', '=', 'ref_operators.id'],
+        ['ref_connection_types', 'visitors.connection_type_id', '=', 'ref_connection_types.id'],
+    ];
+
     private const BUILD_COLUMNS_BASE = [
         // ids / dimensions
         'click_id' => 'click_id',
@@ -103,6 +139,20 @@ class ReportsController extends Controller
         'external_id_id' => 'external_id_id',
         'ad_campaign_id_id' => 'ad_campaign_id_id',
         'x_requested_with_id' => 'x_requested_with_id',
+        // geo/device/isp — GEO_DEVICE_JOINS above resolves these through
+        // clicks.visitor_id -> visitors -> the matching ref_* table.
+        'country' => 'ref_countries.value',
+        'region' => 'ref_regions.value',
+        'city' => 'ref_cities.value',
+        'browser' => 'ref_browsers.value',
+        'browser_version' => 'ref_browser_versions.value',
+        'os' => 'ref_os.value',
+        'os_version' => 'ref_os_versions.value',
+        'device_type' => 'ref_device_types.value',
+        'device_model' => 'ref_device_models.value',
+        'isp' => 'ref_isp.value',
+        'operator' => 'ref_operators.value',
+        'connection_type' => 'ref_connection_types.value',
         // booleans / flags
         'is_unique_stream' => 'is_unique_stream',
         'is_unique_campaign' => 'is_unique_campaign',
@@ -161,16 +211,17 @@ class ReportsController extends Controller
      * Legacy `reports.build` -> `ReportRepository::get()` ->
      * `GridBuilder::factory($queryParams, $userParams)->build()` (§9.3).
      *
-     * ACL (legacy `AccessRestriction`/`DeletedCampaignRestriction`, §9.3)
-     * is NOT applied — `App\Services\Grid\GridBuilder` has no ACL hook,
-     * same TODO already called out for the other Grid-backed endpoints in
-     * this codebase (see EntityGridBuilder docblocks).
+     * ACL IS applied (see App\Services\Grid\GridBuilder::baseQuery()) via
+     * the same `campaign_id IN (...)` restriction as the rest of this
+     * codebase's Grid-backed endpoints — the stale "ACL not applied" note
+     * that used to sit here was corrected alongside the withStatsAction
+     * ACL docblock cleanup (see docs/PORTING_LOG.md, GridAclTest.php).
      */
     public function buildAction(Request $request): array
     {
         $params = QueryParams::fromRequest($request);
 
-        $builder = new GridBuilder('clicks', self::buildColumns(), $this->currentUserService->get());
+        $builder = new GridBuilder('clicks', self::buildColumns(), $this->currentUserService->get(), self::GEO_DEVICE_JOINS);
 
         return $builder->build($params);
     }
@@ -230,6 +281,18 @@ class ReportsController extends Controller
                 ['name' => 'external_id_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
                 ['name' => 'ad_campaign_id_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
                 ['name' => 'x_requested_with_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'country', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'geo', 'width' => 100],
+                ['name' => 'region', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'geo', 'width' => 100],
+                ['name' => 'city', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'geo', 'width' => 100],
+                ['name' => 'browser', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'device', 'width' => 100],
+                ['name' => 'browser_version', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'device', 'width' => 100],
+                ['name' => 'os', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'device', 'width' => 100],
+                ['name' => 'os_version', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'device', 'width' => 100],
+                ['name' => 'device_type', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'device', 'width' => 100],
+                ['name' => 'device_model', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'device', 'width' => 100],
+                ['name' => 'isp', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'geo', 'width' => 100],
+                ['name' => 'operator', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'geo', 'width' => 100],
+                ['name' => 'connection_type', 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'geo', 'width' => 100],
                 ...$extraParamColumns,
                 // volume metrics
                 ['name' => 'clicks', 'type' => 'integer', 'metric' => true, 'sortable' => true, 'summary' => true, 'category' => 'metrics', 'formatter' => 'integer', 'width' => 52],

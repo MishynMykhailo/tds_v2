@@ -4,6 +4,7 @@ use App\Models\Click;
 use App\Models\User;
 use App\Services\AuthService;
 use Database\Factories\UserFactory;
+use Illuminate\Support\Facades\DB;
 
 /*
 |--------------------------------------------------------------------------
@@ -187,6 +188,138 @@ it('filters reports.build by a datetime range', function () {
     $clickIds = collect($response->json('rows'))->pluck('click_id');
 
     expect($clickIds->all())->toBe([$recent->click_id]);
+});
+
+/*
+|--------------------------------------------------------------------------
+| geo/device/isp dimensions — GEO_DEVICE_JOINS (2026-09-03 addition, part 1.3)
+|--------------------------------------------------------------------------
+| No Visitor/RefCountry-style Eloquent models exist yet for these tables
+| (only the migration, see 2025_01_01_000029_create_visitors_and_geo_
+| device_ref_tables.php) — fixtures go straight through DB::table(), same
+| "direct SQL fixture" convention used project-wide for not-yet-modeled
+| tables.
+*/
+function makeGeoDeviceVisitor(array $refValues): int
+{
+    $refIds = [];
+    foreach ($refValues as $table => $value) {
+        $refIds[$table] = DB::table($table)->insertGetId(['value' => $value]);
+    }
+
+    $ipId = DB::table('ref_ips')->insertGetId(['value' => ip2long('203.0.113.'.random_int(1, 254))]);
+    $uaId = DB::table('ref_user_agents')->insertGetId(['value' => 'Mozilla/5.0 (test-fixture; '.uniqid().')']);
+
+    return DB::table('visitors')->insertGetId([
+        'visitor_code' => 'geo-device-test-'.uniqid(),
+        'ip_id' => $ipId,
+        'user_agent_id' => $uaId,
+        'country_id' => $refIds['ref_countries'] ?? null,
+        'region_id' => $refIds['ref_regions'] ?? null,
+        'city_id' => $refIds['ref_cities'] ?? null,
+        'browser_id' => $refIds['ref_browsers'] ?? null,
+        'browser_version_id' => $refIds['ref_browser_versions'] ?? null,
+        'os_id' => $refIds['ref_os'] ?? null,
+        'os_version_id' => $refIds['ref_os_versions'] ?? null,
+        'device_type_id' => $refIds['ref_device_types'] ?? null,
+        'device_model_id' => $refIds['ref_device_models'] ?? null,
+        'isp_id' => $refIds['ref_isp'] ?? null,
+        'operator_id' => $refIds['ref_operators'] ?? null,
+        'connection_type_id' => $refIds['ref_connection_types'] ?? null,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+}
+
+it('resolves geo/device/isp dimensions on reports.build through the visitors join', function () {
+    $visitorId = makeGeoDeviceVisitor([
+        'ref_countries' => 'US',
+        'ref_regions' => 'California',
+        'ref_cities' => 'San Francisco',
+        'ref_browsers' => 'Chrome',
+        'ref_browser_versions' => '128.0',
+        'ref_os' => 'Windows',
+        'ref_os_versions' => '11',
+        'ref_device_types' => 'desktop',
+        'ref_device_models' => 'Generic PC',
+        'ref_isp' => 'Comcast',
+        'ref_operators' => 'N/A',
+        'ref_connection_types' => 'broadband',
+    ]);
+
+    makeReportClick(40, ['visitor_id' => $visitorId, 'cost' => 1]);
+
+    $response = $this->postJson(reportsEndpoint('build'), [
+        'columns' => ['campaign_id', 'country', 'region', 'city', 'browser', 'browser_version', 'os', 'os_version', 'device_type', 'device_model', 'isp', 'operator', 'connection_type'],
+        'filters' => [
+            ['name' => 'campaign_id', 'operator' => 'EQUALS', 'expression' => 40],
+        ],
+        'limit' => 50,
+    ]);
+
+    $response->assertStatus(200);
+    $row = $response->json('rows')[0];
+
+    expect($row['country'])->toBe('US');
+    expect($row['region'])->toBe('California');
+    expect($row['city'])->toBe('San Francisco');
+    expect($row['browser'])->toBe('Chrome');
+    expect($row['browser_version'])->toBe('128.0');
+    expect($row['os'])->toBe('Windows');
+    expect($row['os_version'])->toBe('11');
+    expect($row['device_type'])->toBe('desktop');
+    expect($row['device_model'])->toBe('Generic PC');
+    expect($row['isp'])->toBe('Comcast');
+    expect($row['operator'])->toBe('N/A');
+    expect($row['connection_type'])->toBe('broadband');
+});
+
+it('leaves geo/device dimensions null for a click whose visitor has no matching ref rows (LEFT JOIN, not INNER)', function () {
+    // No visitors row at all for this visitor_id — exercises the LEFT JOIN
+    // path (a click must never disappear from reports.build just because
+    // its visitor lookup is missing).
+    makeReportClick(41, ['visitor_id' => 999999999, 'cost' => 1]);
+
+    $response = $this->postJson(reportsEndpoint('build'), [
+        'columns' => ['campaign_id', 'country', 'clicks'],
+        'grouping' => ['campaign_id', 'country'],
+        'filters' => [
+            ['name' => 'campaign_id', 'operator' => 'EQUALS', 'expression' => 41],
+        ],
+        'limit' => 50,
+    ]);
+
+    $response->assertStatus(200);
+    $row = $response->json('rows')[0];
+
+    expect($row['country'])->toBeNull();
+    expect($row['clicks'])->toBe(1);
+});
+
+it('groups and filters reports.build by the country dimension', function () {
+    $us = makeGeoDeviceVisitor(['ref_countries' => 'US']);
+    $de = makeGeoDeviceVisitor(['ref_countries' => 'DE']);
+
+    makeReportClick(42, ['visitor_id' => $us, 'cost' => 1]);
+    makeReportClick(42, ['visitor_id' => $us, 'cost' => 1]);
+    makeReportClick(42, ['visitor_id' => $de, 'cost' => 1]);
+
+    $response = $this->postJson(reportsEndpoint('build'), [
+        'columns' => ['country', 'clicks'],
+        'grouping' => ['country'],
+        'filters' => [
+            ['name' => 'campaign_id', 'operator' => 'EQUALS', 'expression' => 42],
+            ['name' => 'country', 'operator' => 'EQUALS', 'expression' => 'US'],
+        ],
+        'limit' => 50,
+    ]);
+
+    $response->assertStatus(200);
+    $rows = $response->json('rows');
+
+    expect($rows)->toHaveCount(1);
+    expect($rows[0]['country'])->toBe('US');
+    expect($rows[0]['clicks'])->toBe(2);
 });
 
 it('sorts reports.build rows descending by a metric', function () {

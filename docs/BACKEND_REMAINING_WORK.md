@@ -60,23 +60,40 @@ $this->currentUserService->get()` в `EntityGridBuilder`, а тот
 `Group`-модель (или существующий `GroupsController`'s репозиторный
 метод, если такой уже есть — проверить).
 
-### 1.3 ReportsController не использует уже готовые в traffic-core словари
-`backend/app/Http/Controllers/Admin/ReportsController.php` явно
-исключает geo/device/browser/isp-измерения с комментарием "колонок нет
-на этом порту `clicks`". Это устарело: `ref_countries`/`ref_regions`/
-`ref_cities`/`ref_browsers`/`ref_browser_versions`/`ref_os`/
-`ref_os_versions`/`ref_device_types`/`ref_device_models`/`ref_isp`/
-`ref_operators`/`ref_connection_types` — все появились в traffic-core
-Phase 9-10 (`backend/database/migrations/2025_01_01_000029_create_visitors_and_geo_device_ref_tables.php`),
-и `clicks` таблица их реально использует через FK-колонки visitor'а
-(см. `traffic-core/src/Pipeline/Visitor/DictionaryRepository.php` для
-списка колонок).
+### 1.3 ReportsController не использует уже готовые в traffic-core словари — ЗАКРЫТО (2026-09-03)
+`backend/app/Http/Controllers/Admin/ReportsController.php` исключал
+geo/device/isp-измерения. **Аудит был отчасти неверен**: не было (не "не
+расширен", а вообще не существовало) никакого готового join-паттерна на
+`ref_sources`/`ref_referrers`/`ref_keywords` в `GridBuilder` до этой
+сессии — проверено `grep`, `App\Services\Grid\GridBuilder` был честно
+single-table-only (см. его собственный докблок до правки).
 
-Задача: расширить whitelist измерений в `ReportsController`/
-`Component\Reports`-эквивалентном Grid-построителе join'ами на эти
-`ref_*` таблицы. Смотреть, как уже сделаны существующие join'ы на
-`ref_sources`/`ref_referrers`/`ref_keywords` (те же самые, из Phase 10) —
-паттерн уже есть в коде, просто не расширен на geo/device/isp.
+Сделано: `App\Services\Grid\GridBuilder` получил опциональный
+конструкторный параметр `$joins` (LEFT JOIN-ы, применяются в
+`baseQuery()` ко всем трём запросам — select/total/summary), не ломает
+существующего вызова из `ConversionsController` (параметр по умолчанию
+`[]`). `ReportsController::GEO_DEVICE_JOINS` — 13 LEFT JOIN-ов
+(`clicks.visitor_id -> visitors -> ref_countries/ref_regions/ref_cities/
+ref_browsers/ref_browser_versions/ref_os/ref_os_versions/
+ref_device_types/ref_device_models/ref_isp/ref_operators/
+ref_connection_types`), 12 новых измерений в
+`BUILD_COLUMNS_BASE`/`definitionAction()` (`country`/`region`/`city`/
+`browser`/`browser_version`/`os`/`os_version`/`device_type`/
+`device_model`/`isp`/`operator`/`connection_type`).
+
+НЕ включено в этот раунд (вне скоупа задачи, не забыто):
+referrer/search_engine/keyword/source/ad_campaign_id/external_id/
+creative_id/x_requested_with/destination NAME-колонки,
+`language`/`ip`/`user_agent` (последние два требуют MySQL-only
+`INET_NTOA`, недоступной под SQLite, на котором крутится Pest-сьют —
+тот же принцип, что уже был у calendar-колонок).
+
+Тесты: `tests/Feature/ReportsTest.php` — 3 новых теста (реальный джойн
+возвращает имя, LEFT JOIN не роняет клик без визитора, group+filter по
+`country`). Живая проверка на реальном MySQL (Docker `tds2-mysql`, не
+только SQLite) через `php artisan tinker` — джойн `clicks -> visitors ->
+ref_countries` подтверждён на реальных данных, фикстуры удалены. Полный
+`./vendor/bin/pest` — 353/353 зелёный, `php -l` чисто.
 
 ---
 
