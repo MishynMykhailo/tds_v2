@@ -133,6 +133,42 @@ domains) — итого ~26 задач, полный список с обосн�
 - **`app:prune-expired-password-hashes`** (`->daily()`) — просроченные
   `user_password_hashes` (порт `Users\PruneTask\PruneUserPasswordHash`).
 
+**Ещё 2 команды дозакрыты (2026-09-03, "добей хвосты" раунд)** — обе
+раньше числились заблокированными на непортированной инфре, живьём
+перепроверено, что это устарело:
+- **`app:prune-stream-events`** (`->daily()`) — `DELETE FROM
+  monitoring_history WHERE date < now()-30 дней` (порт
+  `Streams\PruneTask\PruneStreamEvents`/`StreamEventService::prune()`,
+  дословно по легаси-исходнику). Таблица `monitoring_history` давно
+  реальна (StreamEvents-модуль портирован ещё в начале проекта) —
+  зависимости никогда не было, просто команду не написали.
+- **`app:prune-hit-limits`** (`->daily()`) — `ZREMRANGEBYSCORE` на
+  Redis-сетах `rate:<stream_id>` старше 1 дня, с исключением для
+  стримов, у которых `limit`-фильтр имеет `total`-кап (порт
+  `StreamFilters\PruneTask\PruneHitLimits`/`RedisStorage::prune()`).
+  Механизм `rate:<stream_id>` реален с traffic-core Phase 11
+  (hit-limit/cost/payout) — просто не было пруnера.
+
+  **Побочная находка при реализации**: `backend/`'s `REDIS_CLIENT=phpredis`
+  был прописан, но PHP-расширение phpredis физически не установлено ни
+  в одном Docker-образе проекта (`deploy/Dockerfile.dev-php`) — баг был
+  тихим, потому что Redis до этого вообще не использовался в backend/
+  (очередь/кэш/сессии — всё на `database`). Исправлено переключением на
+  `predis/predis` (тот же, уже провалидированный пакет, что и
+  traffic-core использует по той же причине — повторная security-проверка
+  не нужна, тот же пакет/версия). Добавлено новое Redis-подключение
+  `traffic` (`config/database.php`) без Laravel-префикса — специально
+  для чтения/записи в тот же keyspace, что traffic-core использует
+  напрямую (`default`/`cache`-подключения имеют свой префикс и никогда
+  не видят реальные ключи traffic-core).
+
+Оба живьём проверены на реальных `tds2-mysql`/`tds2-redis` (фикстуры
+удалены). `tests/Feature/PruneCommandsTest.php` — +1 тест на
+`prune-stream-events` (чистый SQL, безопасен на SQLite);
+`prune-hit-limits` осознанно без автотеста — требует реального Redis, а
+Pest-сьют специально изолирован на SQLite без внешних сервисов. Полный
+`./vendor/bin/pest` — 402/402.
+
 **ИСПРАВЛЕНИЕ (2026-09-03, стресс-проверка):** утверждение "no-op по
 умолчанию на чистой установке" выше — УСТАРЕЛО/НЕВЕРНО, написано до того
 как `SettingsSeeder` был добавлен в этой же сессии позже (см. запись
@@ -174,11 +210,24 @@ FK не даёт создать такую строку даже в фиксту
 - `WarmupCacheTask`/`FlushOldCacheTask`/`PruneMysqlSessions`/`CheckTsTask` —
   не применимы к этой архитектуре (легаси-кэш-namespace'ы, MySQL-сессии
   вместо Redis TTL, пустой no-op).
-- `RefresherTask` (принудительный HTTPS через 31 день), `PruneDailyCap`/
-  `PruneStreamEvents`/`PruneLandingOfferCache`/`PruneUserBotDBCA`/
-  `PruneHitLimits`/`pruneReferences()` (ref_*-словари) — низкий приоритет
-  или зависят от непортированной инфры (ConversionCapacity,
-  file-based lp-cache, DBCA), можно пересмотреть по отдельному запросу.
+- `PruneDailyCap` — реально зависит от непортированного
+  ConversionCapacity-модуля (дневные капы на конверсии), которого в
+  проекте физически нет — не низкий приоритет, а архитектурная задача.
+- `PruneUserBotDBCA` — реально зависит от DBCA bot-signature бинарников
+  (`UserBotDBCARepository`), которых в проекте физически нет — бот
+-детекция в этом порте использует хардкод-список + кастомные сигнатуры
+  (`BotDetectionService`), не DBCA-файлы.
+- `PruneLandingOfferCache` — файловый lp-offer кэш-слой не существует в
+  архитектуре этого проекта вообще (traffic-core использует
+  DB/Redis-подходы вместо файлового кэша) — структурно нечего чистить,
+  не пропуск.
+- `RefresherTask` (принудительный HTTPS через 31 день) — низкий
+  приоритет, завязан на прод-деплой-специфичный "первый запуск"
+  трекинг (раздел 5, только по явному запросу).
+- `pruneReferences()` (ref_*-словари) — зависит от непортированного
+  `ClicksDefinition::getRelations()` (см. `ConversionsController::
+  updateCostDefinitionAction`'s докблок, та же причина).
+- `PruneStreamEvents`/`PruneHitLimits` — **ЗАКРЫТО**, см. выше.
 
 ---
 

@@ -1645,6 +1645,115 @@ dev-БД за эту сессию. Исправлено в источнике + 
 
 ---
 
+## Macros / Branding / IpInfoDataTypes — последние 3 модуля раздела 6, ЗАКРЫТО — 2026-09-03
+
+Тринадцатый-пятнадцатый модуль — закрывает backlog раздела 6 полностью
+(43/43 контроллера). Живая сверка нашла:
+
+1. **Реальный баг**: `BrandingController::indexAction()` вообще не имел
+   ACL-гейта (любой залогиненный пользователь читал branding-настройки),
+   а `updateAction()` проверял только `isAdmin()`. Реальный легаси-код
+   (`Component\Branding\Controller\BrandingController`) НЕ содержит
+   ACL-проверки сам, но ОБА действия гейтятся ДО диспатча тем же общим
+   resource-гейтом, что уже находили для Conversions
+   (`AdminRequestFactory::checkAuthorization()` ->
+   `isResourceAllowed($user, "branding")`, точное сообщение "You have no
+   permission to access to this page - Branding") — "branding" не
+   дефолтный ресурс. Добавлен тот же гейт на оба action'а.
+2. **Реальный баг**: `indexAction()` создавал и сохранял `Branding`-строку
+   в БД (`Branding::create([])`) побочным эффектом на обычное чтение.
+   Реальный легаси до первого `branding.update` отдаёт `{"id": null,
+   "logo": null, "favicon": null}` — строка в `tds_branding` создаётся
+   только реальным сохранением. Исправлено.
+3. **КРУПНАЯ находка (не баг порта, НЕ воспроизведена)**: собственный
+   PHP-шим легаси `array_flatten()` (`application/misc/shim.php`) имеет
+   реальный баг замыкания — `array_walk_recursive($array, function ($a)
+   { $flattened_array[] = $a; })` захватывает `$flattened_array` ПО
+   ЗНАЧЕНИЮ (нет `use (&$flattened_array)`), поэтому каждый push уходит
+   в одноразовую локальную копию, а внешний массив всегда пустой.
+   `MacroRepository::getMacroNames(null)` (запрос "все макросы без
+   фильтра", именно так реальный UI-пикер и вызывает по умолчанию)
+   всегда отдаёт `[]` в живом легаси — автодополнение макросов реально
+   сломано в проде. Отдельно: классификация click/conversion в
+   `_findType()` инвертирована (`?type=click` реально отдаёт
+   conversion-макросы и наоборот). Порт всегда отдаёт полный,
+   корректно-названный список независимо от `type` — не баг-фильтр,
+   специально не воспроизведённый.
+
+Новый `tests-contract/tests/MacrosBrandingIpInfoTest.php` (6 тестов) —
+зелёные на ОБОИХ таргетах. `tests-contract` (без `smoke`) — **163/163
+на ОБОИХ таргетах — backlog раздела 6 полностью закрыт, 43/43
+контроллера**. `backend/./vendor/bin/pest` — 401/401.
+
+---
+
+## Cron-хвосты: PruneStreamEvents/PruneHitLimits + Redis-инфра фикс — 2026-09-03
+
+По запросу "добей хвосты" — перепроверены пункты раздела 2
+(Console/Cron), ранее помеченные "заблокировано непортированной
+инфрой". Два реально дозакрыты:
+
+1. **`app:prune-stream-events`** — порт `Streams\PruneTask\
+   PruneStreamEvents`/`StreamEventService::prune()` — `DELETE FROM
+   monitoring_history WHERE date < now()-30 дней`, дословно по
+   легаси-исходнику (`PRUNE_PERIOD = 30`). Таблица `monitoring_history`
+   реальна с самого начала проекта (StreamEvents-модуль) — блокировки
+   никогда не было, просто команда не была написана.
+2. **`app:prune-hit-limits`** — порт `StreamFilters\PruneTask\
+   PruneHitLimits`/`RedisStorage::prune()` — `ZREMRANGEBYSCORE` на
+   `rate:<stream_id>` Redis-сетах старше 1 дня (`TTL = 1`), с
+   исключением для стримов, чей `limit`-фильтр имеет `payload.total`
+   truthy (та же exception-логика, что легаси). Механизм
+   `rate:<stream_id>` реален с traffic-core Phase 11 — просто не было
+   пруnера.
+
+**Побочная находка при реализации #2**: `backend/`'s `.env`/`.env.example`
+имели `REDIS_CLIENT=phpredis`, но PHP-расширение phpredis физически не
+установлено ни в одном Docker-образе проекта
+(`deploy/Dockerfile.dev-php` собирает только `pdo_mysql`/`pdo_sqlite`/
+`zip`) — подтверждено живьём (`php -m | grep redis` — пусто,
+`composer show | grep predis` — пусто). Redis до этого НИКОГДА не
+использовался в `backend/` (`QUEUE_CONNECTION`/`CACHE_STORE`/
+`SESSION_DRIVER` — все `database`), поэтому баг был тихим и никого не
+затрагивал до этой команды. Исправлено переключением на `predis/predis`
+(`^3.0`, v3.6.0 залочена) — тот же пакет, что уже используется и
+провалидирован в `traffic-core` по идентичной причине
+(`TrafficCore\Redis\RedisClient`'s докблок: MIT, 341M+ установок, 0
+security advisories) — повторная проверка не потребовалась, тот же
+пакет/версия. Добавлено новое Redis-подключение `traffic`
+(`config/database.php`, `'prefix' => ''`) — специально для чтения/записи
+в keyspace, который traffic-core пишет НАПРЯМУЮ без префикса;
+`default`/`cache`-подключения используют реальный Laravel-префикс
+(`Str::slug(APP_NAME).'-database-'`) и никогда не увидели бы
+`rate:<id>`-ключи traffic-core.
+
+Оба живьём проверены на реальных `tds2-mysql`/`tds2-redis` через `php
+artisan tinker` (реальные Campaign/Stream/Trigger/StreamEvent/
+StreamFilter фикстуры + реальные Redis ZADD/ZCARD — не только SQLite):
+`prune-stream-events` удалил 45-дневную запись, оставил 29-дневную;
+`prune-hit-limits` вычистил >1-дневные записи у стрима без total-капа
+(2 записи → 1), полностью сохранил историю у стрима С total-капом (2
+записи → 2). Все фикстуры удалены после проверки.
+
+**Подтверждено (НЕ пропуск, реальная архитектурная блокировка)**:
+`PruneDailyCap` (ConversionCapacity-модуль), `PruneUserBotDBCA` (DBCA
+bot-signature бинарники), `PruneLandingOfferCache` (файловый lp-кэш) —
+все три зависят от инфры, которой в проекте физически нет (не просто
+"не успели"), подтверждено grep'ом по всему проекту. `pruneReferences()`
+уже был задокументирован как блокированный на `ClicksDefinition::
+getRelations()`. `RefresherTask` — низкий приоритет, завязан на
+прод-деплой-специфичный первый-запуск трекинг (раздел 5).
+
+`tests/Feature/PruneCommandsTest.php` — +1 тест на `prune-stream-events`
+(чистый SQL/SQLite-safe); `prune-hit-limits` осознанно БЕЗ автотеста —
+требует реального Redis, а Pest-сьют специально изолирован на SQLite
+без внешних сервисов (`phpunit.xml`'s `DB_CONNECTION=sqlite`), живая
+Docker-проверка — единственный источник правды здесь, как и для
+`local_file`'s php-cgi/php-fpm пула раньше в проекте. Полный
+`./vendor/bin/pest` — **402/402**. `php -l` чисто.
+
+---
+
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.
 Завершённая история (traffic-core Фазы 1-17) — в `docs/PORTING_LOG_ARCHIVE.md`,
 туда же архивировать записи старше ~2-3 недель/сессий, когда этот файл
