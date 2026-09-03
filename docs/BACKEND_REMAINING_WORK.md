@@ -97,23 +97,63 @@ ref_countries` подтверждён на реальных данных, фик
 
 ---
 
-## 2. Console/Cron/DelayedCommands/PruneTask — джобы не написаны
+## 2. Console/Cron/DelayedCommands/PruneTask — ЧАСТИЧНО ЗАКРЫТО (2026-09-03)
 
-Архитектурное решение уже принято и задокументировано (в докблоке
-`DiagnosticsController.php`): легаси-модули Console/Cron/DelayedCommands
-заменяются нативным Laravel Scheduler + Queue, не переносятся как
-отдельные "модули". Но `backend/app/Console/Commands/` **реально пуст** —
-из всех легаси cron-задач перенесена только одна (Cleaner →
-`DeleteStatsJob`, уже сделано и протестировано).
+Полный триаж легаси: 18 конкретных `CronTaskInterface`-задач (`grep -rl
+"implements.*CronTaskInterface"`) + 9 конкретных `PruneTaskInterface`-задач
++ 7 `BaseArchivePruneTask`-наследников (`ARCHIVE_TYPE`, по одному на
+campaigns/streams/offers/landings/traffic_sources/affiliate_networks/
+domains) — итого ~26 задач, полный список с обоснованием "порт/скип" в
+`docs/PORTING_LOG.md`. Портированы 4 команды в
+`backend/app/Console/Commands/` + `Schedule::command()` в
+`backend/routes/console.php`:
 
-Задача: пройтись по легаси `application/Component/Cron/`,
-`application/Component/PruneTask/`, `application/Component/DelayedCommands/`
-(смотреть реальный код, не только имена классов) и перенести каждую
-реальную периодическую задачу как Laravel `Command`+`Schedule::command()`
-запись в `backend/routes/console.php` (уже используется для существующих
-задач, смотреть формат там). Приоритет — по частоте использования в
-легаси (какие задачи реально что-то делают с боевыми данными: очистка,
-агрегация статистики, health-checks), не по алфавиту.
+- **`app:prune-archived-entities`** (`->daily()`) — hard-delete
+  `state='deleted'` строк старше `archive_ttl` дней, по всем 7
+  ARCHIVE_TYPE-сущностям (порт `Pruner`/`BaseArchivePruneTask`).
+- **`app:prune-click-stats`** (`->daily()`) — диспатчит уже готовый
+  `DeleteStatsJob` с `endDate = now()-stats_ttl дней` (порт
+  `Clicks\CronTask\PruneClicks`).
+- **`app:prune-orphaned-data`** (`->daily()->at('03:30')`) — visitors без
+  кликов / conversions без кликов / click_links без кликов (порт
+  `CleanerService::pruneVisitors/pruneConversions/pruneClickLinks`).
+- **`app:prune-expired-password-hashes`** (`->daily()`) — просроченные
+  `user_password_hashes` (порт `Users\PruneTask\PruneUserPasswordHash`).
+
+Все 4 — no-op по умолчанию на чистой установке (governing setting
+`archive_ttl`/`stats_ttl` не задан = очистка выключена, как в легаси).
+Тесты: `tests/Feature/PruneCommandsTest.php` (6 тестов). Живая проверка
+на реальном MySQL (Docker `tds2-mysql`) через `php artisan tinker` +
+`php artisan queue:work --once --stop-when-empty` (для `prune-click-stats`,
+т.к. `QUEUE_CONNECTION=database` в реальном `.env`, не `sync` как в
+тестах) — все 4 подтверждены, фикстуры удалены. Полный
+`./vendor/bin/pest` — 367/367, `php -l` чисто.
+
+**Найдено и НЕ портировано (реальная находка, не пропуск)**: легаси
+`Triggers\CronTask\DeleteOldTriggers` (удаление triggers-записей с
+несуществующим `stream_id`) — в этом проекте `triggers.stream_id` имеет
+РЕАЛЬНЫЙ `->constrained()->cascadeOnDelete()` (в отличие от легаси-схемы),
+поэтому осиротевший trigger структурно невозможен — команда была бы
+гарантированным no-op, не портировал специально (доказано живым тестом,
+FK не даёт создать такую строку даже в фикстуре).
+
+**Осознанно НЕ портировано в этом раунде** (см. полный список в
+`docs/PORTING_LOG.md`, кратко):
+- `SyncCostsWithFacebook`/`SyncConversionAppsFlyer` — реальные вызовы
+  внешних API (Facebook/AppsFlyer), отдельная задача с credentials, не
+  "довести cron".
+- `RunTriggersTask`/`CheckDomains`/`EnableSSLTask`/`UpdateTemplatesTask` —
+  зависят от непортированной инфры (AV-checker, DomainChecker, certbot,
+  template-downloader) — либо раздел 5 (прод-деплой), либо отдельная
+  задача.
+- `WarmupCacheTask`/`FlushOldCacheTask`/`PruneMysqlSessions`/`CheckTsTask` —
+  не применимы к этой архитектуре (легаси-кэш-namespace'ы, MySQL-сессии
+  вместо Redis TTL, пустой no-op).
+- `RefresherTask` (принудительный HTTPS через 31 день), `PruneDailyCap`/
+  `PruneStreamEvents`/`PruneLandingOfferCache`/`PruneUserBotDBCA`/
+  `PruneHitLimits`/`pruneReferences()` (ref_*-словари) — низкий приоритет
+  или зависят от непортированной инфры (ConversionCapacity,
+  file-based lp-cache, DBCA), можно пересмотреть по отдельному запросу.
 
 ---
 

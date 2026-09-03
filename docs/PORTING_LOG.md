@@ -1506,4 +1506,98 @@ hide_click остаются fail-open в `FilterEngine` (только `bot` ре
 (`is_using_proxy`) не портирован, нет `ProxyService`-рантайма.
 
 ---
+
+## conversions.import (backlog 3.2) — 2026-09-03
+
+Реализован `App\Services\ConversionImportService` — порт легаси
+`ConversionsService::processEntries()`/`import()`/`importArray()`.
+Аудит был отчасти неверен: причиной 501 в доке значилось "зависит от
+`Component\Clicks\Grid\ClicksDefinition`" — на самом деле `import()` НЕ
+зависит от ClicksDefinition вообще (та зависимость — только у
+`updateCostDefinitionAction`, соседнего метода того же контроллера,
+который так и остаётся 501). Реальная зависимость `import()` —
+`Component\Postback\ProcessPostback\Pipeline` (та же логика, что живые
+постбеки), которая уже портирована в `traffic-core/src/Postback/
+PostbackProcessor.php`. Поскольку `backend/` и `traffic-core/` —
+раздельные Composer-проекты (ionCube-план из ARCHITECTURE_PLAN.md), код
+продублирован нативно на Eloquent, той же семантикой find-or-update-by-
+sub_id + синк click-тоталов.
+
+Осознанно НЕ портирована конвертация валют (`CurrencyService::exchange()`
+бьёт во внешний exchange-rate API — тот же прецедент, что
+`TrafficCore\Postback\Postback` уже задокументировал для живых
+постбеков). `currency`-параметр остаётся обязательным (406), но не
+влияет на сохранённый revenue.
+
+Тесты: `tests/Feature/ConversionsTest.php` (4 новых). Живая проверка на
+реальном MySQL (`tds2-mysql`) через `php artisan tinker` — фикстуры
+удалены. Полный `./vendor/bin/pest` — 361/361, `php -l` чисто.
+
+---
+
+## Console/Cron/PruneTask (backlog 2) — частично закрыто — 2026-09-03
+
+Полный триаж легаси (не по памяти, реальный `grep -rl` по
+`application/`):
+
+**18 `CronTaskInterface`-задачи:**
+`Domains\EnableSSLTask`, `Domains\CheckDomains`, `Triggers\RunTriggersTask`,
+`Archive\PruneArchive`, `Triggers\DeleteOldTriggers`,
+`DelayedCommands\ExecuteDelayedCommand`,
+`ThirdPartyIntegration\SyncCostsWithFacebook`,
+`ThirdPartyIntegration\SyncConversionAppsFlyer`,
+`System\WarmupCacheTask`, `Logs\LogCleaner`, `System\RefresherTask`,
+`System\CheckTsTask` (пустой `run(){}` — мёртвый код в самом легаси),
+`System\FlushOldCacheTask`, `Templates\UpdateTemplatesTask`,
+`Cleaner\PruneData`, `Reports\PruneOldFiles`,
+`Stats\PruneMysqlSessions`, `Grid\PruneReferences`, `Clicks\PruneClicks`.
+
+**9 `PruneTaskInterface`-задачи (GENERAL_TYPE/REFERENCE_TYPE) + 7
+`BaseArchivePruneTask`-наследников (ARCHIVE_TYPE, по одному на
+campaigns/streams/offers/landings/traffic_sources/affiliate_networks/
+domains).**
+
+**Портировано (4 команды, см. BACKEND_REMAINING_WORK.md раздел 2 для
+деталей реализации/тестов)**: `app:prune-archived-entities` (7
+ARCHIVE_TYPE), `app:prune-click-stats` (`Clicks\PruneClicks`, реюз
+`DeleteStatsJob`), `app:prune-orphaned-data` (`pruneVisitors`/
+`pruneConversions`/`pruneClickLinks`), `app:prune-expired-password-hashes`
+(`PruneUserPasswordHash`).
+
+**Найдено, НЕ портировано (структурная причина, не пропуск)**:
+`Triggers\DeleteOldTriggers` — этот проект даёт `triggers.stream_id`
+реальный `cascadeOnDelete()` FK (легаси — нет), так что осиротевший
+trigger физически невозможен. Подтверждено живым тестом: даже фикстура
+с несуществующим `stream_id` не проходит вставку (SQLite FK error в
+тестах, тот же constraint в реальном MySQL).
+
+**Осознанно не портировано (зависимости/приоритет — не забыто)**:
+- `SyncCostsWithFacebook`/`SyncConversionAppsFlyer` — реальные внешние
+  API (Facebook/AppsFlyer), отдельная задача с credentials.
+- `RunTriggersTask` (нужен `AVCheckerService`/`CheckTrigger` — не
+  портированы), `CheckDomains`/`EnableSSLTask` (DomainChecker/certbot —
+  раздел 5, прод-деплой), `UpdateTemplatesTask` (внешний template-CDN,
+  Templates-модуль вообще не виден в этом проекте).
+- `WarmupCacheTask`/`FlushOldCacheTask`/`System\CheckTsTask` — легаси-
+  кэш-namespace'ы или пустой no-op, не применимо к этой архитектуре.
+- `PruneMysqlSessions` — легаси MySQL-сессионное хранилище уникальности,
+  этот проект использует Redis TTL (`UniquenessService`) — само-
+  истекает, prune не нужен в принципе.
+- `RefresherTask` (принудительный HTTPS через 31 день) — низкий
+  приоритет, тривиально, но не запрошено явно.
+- `PruneDailyCap`/`PruneStreamEvents`/`PruneLandingOfferCache`/
+  `PruneUserBotDBCA`/`PruneHitLimits` — зависят от непортированной
+  инфры (ConversionCapacity, файловый lp-кэш, DBCA-бинарники, Redis
+  `rate:*`-очистка для HitLimit — см. `HitLimitService`'s собственный
+  докблок "NOT ported: prune()").
+- `pruneReferences()` (ref_*-словари) — зависит от `ClicksDefinition::
+  getRelations()`, не портировано (см. `ConversionsController::
+  updateCostDefinitionAction`'s докблок, та же причина).
+
+Полный `./vendor/bin/pest` — 367/367, `php -l` чисто, живая проверка на
+реальном MySQL для всех 4 команд (включая `queue:work --once` для
+`prune-click-stats`, т.к. `.env`'s `QUEUE_CONNECTION=database`, не
+`sync`).
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
