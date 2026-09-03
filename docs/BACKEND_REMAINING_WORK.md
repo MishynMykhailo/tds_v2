@@ -431,13 +431,13 @@ PORTING_LOG.md` ("Разбор оставшихся контрактных па�
 TrafficSources, Users, Settings, ApiKeys, Triggers, FavouriteStreams,
 StreamFilters/Actions/Events/Types/Schemas, Dics, Profile,
 UserPreferences, AffiliateNetworks, Landings, Botlist, Labels,
-GeoProfiles, GeoDb, Conversions, Reports, **Editor (2026-09-03 — 8
-тестов, реальный баг с `preview` найден и исправлен + подтверждена
-живьём path-traversal уязвимость в самом легаси + крупная находка про
-гостевой доступ (HTML-шелл вместо JSON 403 без сессии) — см.
-docs/PORTING_LOG.md)**.
+GeoProfiles, GeoDb, Conversions, Reports, Editor, **Cleaner (2026-09-03
+— 7 тестов, 2 реальных бага исправлено (406→200 для missing dates,
+403→404 для несуществующей campaign_id) + подтверждён живьём реальный,
+independent-от-окружения краш в самом легаси (`ArgumentCountError` —
+"очистить всё" вообще не работает в проде) — см. docs/PORTING_LOG.md)**.
 
-**НЕ покрыты (следующие по очереди)**: Cleaner, весь кластер
+**НЕ покрыты (следующие по очереди)**: весь кластер
 ThirdPartyIntegration/CampaignIntegration (TPI, TpiMandatory, Facebook/
 AppsFlyer-интеграции, CodePresets, KClientJsPreset), Macros, Branding,
 IpInfoDataTypes.
