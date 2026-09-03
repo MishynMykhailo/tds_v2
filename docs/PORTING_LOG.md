@@ -1441,6 +1441,37 @@ seconds") — срабатывает при большом числе логин
 
 ---
 
+## Reports — контрактный тест + системный баг в QueryParams (metrics) — 2026-09-03
+
+Четвёртый модуль. Живая сверка нашла:
+
+1. **Системная находка**: `metrics`-only запрос (без явного `columns`)
+   молча игнорировал `metrics` при выборе колонок — `reports.summary` с
+   `{"metrics":["clicks"]}` отдавал ВЕСЬ фиксированный ~20-полей
+   summary-объект вместо `{"clicks": N}`. Реальный легаси
+   `QueryParams::__construct()` безусловно мёржит `columns ∪ grouping ∪
+   metrics`, когда `metrics`/`grouping` присутствуют — не только как
+   фоллбэк для пустого `columns` (подтверждено чтением
+   `application/Component/Grid/QueryParams/QueryParams.php:171-172`).
+   Портировано дословно в `QueryParams::fromRequest()` — чинит разом
+   `reports.build`/`.summary` И `conversions.log` (общий класс).
+2. `reports.parameterAliases`/`.statsForCampaign`: дженерик "Campaign not
+   found" вместо реального легаси-текста `"Traffic\Model\Campaign #<id>
+   not found"` — тот же класс фикса, что уже применён к Labels/
+   GeoProfiles в этой сессии.
+
+Ложный след, вовремя отброшен: GET-запрос с `range[interval]=today` в
+query-string ломал роутинг порта (отдавал Laravel welcome-page) — не
+баг приложения, POST с тем же телом в JSON отработал идентично на
+ОБОИХ таргетах; просто GET+bracket-нотация не тот способ вызова этого
+action'а ни в одном из двух бэкендов.
+
+Новый `tests-contract/tests/ReportsTest.php` (8 тестов) — зелёные на
+ОБОИХ таргетах. `tests-contract` (без `smoke`) — **125/125 на ОБОИХ
+таргетах**. `backend/./vendor/bin/pest` — 399/399.
+
+---
+
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.
 Завершённая история (traffic-core Фазы 1-17) — в `docs/PORTING_LOG_ARCHIVE.md`,
 туда же архивировать записи старше ~2-3 недель/сессий, когда этот файл

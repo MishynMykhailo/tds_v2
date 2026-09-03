@@ -431,14 +431,14 @@ PORTING_LOG.md` ("Разбор оставшихся контрактных па�
 TrafficSources, Users, Settings, ApiKeys, Triggers, FavouriteStreams,
 StreamFilters/Actions/Events/Types/Schemas, Dics, Profile,
 UserPreferences, AffiliateNetworks, Landings, Botlist, Labels,
-GeoProfiles, GeoDb, **Conversions (2026-09-03 — 11 тестов, 4 реальных
-бага найдено и исправлено, включая системный `QueryParams`
-range/limit-гейт, затрагивающий 7 контроллеров — см. docs/PORTING_LOG.md)**.
+GeoProfiles, GeoDb, Conversions, **Reports (2026-09-03 — 8 тестов,
+системный `QueryParams` metrics-мёрж баг найден и исправлен, чинит
+заодно reports.build/.summary/conversions.log — см. docs/PORTING_LOG.md)**.
 
-**НЕ покрыты (следующие по очереди)**: Reports, Editor, Cleaner, весь
-кластер ThirdPartyIntegration/CampaignIntegration (TPI, TpiMandatory,
-Facebook/AppsFlyer-интеграции, CodePresets, KClientJsPreset), Macros,
-Branding, IpInfoDataTypes.
+**НЕ покрыты (следующие по очереди)**: Editor, Cleaner, весь кластер
+ThirdPartyIntegration/CampaignIntegration (TPI, TpiMandatory, Facebook/
+AppsFlyer-интеграции, CodePresets, KClientJsPreset), Macros, Branding,
+IpInfoDataTypes.
 
 ## 8. Аудит всех ~43 контроллеров (2026-09-03) — найденные и открытые пункты
 
