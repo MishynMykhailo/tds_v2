@@ -431,11 +431,13 @@ PORTING_LOG.md` ("Разбор оставшихся контрактных па�
 TrafficSources, Users, Settings, ApiKeys, Triggers, FavouriteStreams,
 StreamFilters/Actions/Events/Types/Schemas, Dics, Profile,
 UserPreferences, AffiliateNetworks, Landings, Botlist, Labels,
-GeoProfiles, GeoDb, Conversions, **Reports (2026-09-03 — 8 тестов,
-системный `QueryParams` metrics-мёрж баг найден и исправлен, чинит
-заодно reports.build/.summary/conversions.log — см. docs/PORTING_LOG.md)**.
+GeoProfiles, GeoDb, Conversions, Reports, **Editor (2026-09-03 — 8
+тестов, реальный баг с `preview` найден и исправлен + подтверждена
+живьём path-traversal уязвимость в самом легаси + крупная находка про
+гостевой доступ (HTML-шелл вместо JSON 403 без сессии) — см.
+docs/PORTING_LOG.md)**.
 
-**НЕ покрыты (следующие по очереди)**: Editor, Cleaner, весь кластер
+**НЕ покрыты (следующие по очереди)**: Cleaner, весь кластер
 ThirdPartyIntegration/CampaignIntegration (TPI, TpiMandatory, Facebook/
 AppsFlyer-интеграции, CodePresets, KClientJsPreset), Macros, Branding,
 IpInfoDataTypes.
