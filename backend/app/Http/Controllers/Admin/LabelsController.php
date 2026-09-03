@@ -37,6 +37,26 @@ use Symfony\Component\HttpFoundation\Response;
  * no ref-dictionary lookup/join is performed at all. This is a deliberate
  * schema-driven simplification, not an oversight.
  *
+ * CONFIRMED live (2026-09-03) this divergence is real and necessary, not
+ * just theoretical: legacy's `LabelService::updateLabels()`/`replaceList()`
+ * treat `items`'/`ref_values`' KEYS as the ref dictionary row's raw
+ * `value` (cast through `ip2long()` for `ip`, `(int)` otherwise) and do a
+ * `WHERE value = ...` lookup to resolve the real numeric `ref_id` before
+ * ever touching `labels` — i.e. legacy's own wire contract requires the
+ * CALLER to already know exactly what internal transformation its `value`
+ * column needs (which silently produces wrong/empty results for a
+ * non-numeric `ref_name` like `source` with a domain-string value — verified
+ * live, a literal domain string key resolves to `(int) "example.com" ===
+ * 0` and matches nothing). This port's `ref_value`-keyed contract sidesteps
+ * that footgun entirely — a real behavioral improvement, not just a
+ * schema-forced compromise, so intentionally NOT replicated even though a
+ * live re-check was done specifically to make sure this wasn't secretly
+ * load-bearing for a real client. `ref_name` validation also intentionally
+ * improves on legacy: an unrecognized `ref_name` here is a clean 406
+ * (`validRefNames()`), where real legacy has no such check at all and
+ * 500s via `LabelService::getRefDefinition()`'s uncaught `Error` (verified
+ * live) — again a deliberate, safe improvement, not an oversight.
+ *
  * Access: all three real actions gate on `isViewAllowed($campaign)` against
  * the label's parent campaign (verified against legacy source — the write
  * actions `update`/`replaceList` use `isViewAllowed`, not `isEditAllowed`,
@@ -63,12 +83,21 @@ class LabelsController extends Controller
     /**
      * Legacy label-eligible `ref_name`s (`Column::LABELS_ALLOWED === true`
      * entries in ClicksDefinition::initColumns(), cross-checked against
-     * `LabelService::getRefDefinition()`'s supported cases). `sub_id_11..15`
-     * are omitted — legacy default `ParameterRepository::getSubIdCount()`
-     * is 10 unless a `sub_id_15_id` column exists, same default this port's
-     * StreamFiltersController already assumes for its own sub_id catalogue.
-     * Titles are the literal English strings from
+     * `LabelService::getRefDefinition()`'s supported cases). Titles are the
+     * literal English strings from
      * application/Component/Grid/translations/en.php.
+     *
+     * CORRECTION (2026-09-03): a prior version capped `sub_id_N` at 10 on
+     * the premise "legacy default `ParameterRepository::getSubIdCount()`
+     * is 10 unless a `sub_id_15_id` column exists" — that premise is
+     * schema-conditional, and THIS port's own `clicks` table (`database/
+     * migrations/2025_01_01_000018_create_clicks_table.php`) already has
+     * `sub_id_1_id` through `sub_id_15_id` (all 15). Verified live against
+     * legacy port 8090 (`?object=labels.refNameVariations`): real legacy
+     * returns exactly 15 `sub_id_N` entries, not 10 — confirming this
+     * port's own schema puts it on the "15" side of that same condition,
+     * not the "10" default. Capped at 10 was a real, confirmed bug, not a
+     * defensible scope decision.
      */
     private const REF_NAME_TITLES = [
         'ip' => 'IP',
@@ -79,11 +108,13 @@ class LabelsController extends Controller
         'keyword' => 'Keyword',
     ];
 
+    private const SUB_ID_COUNT = 15;
+
     /** @return list<string> */
     public static function validRefNames(): array
     {
         $names = array_keys(self::REF_NAME_TITLES);
-        for ($i = 1; $i <= 10; $i++) {
+        for ($i = 1; $i <= self::SUB_ID_COUNT; $i++) {
             $names[] = "sub_id_{$i}";
         }
 
@@ -147,6 +178,23 @@ class LabelsController extends Controller
         return response()->json(['error' => $message], 403);
     }
 
+    /**
+     * CORRECTION (2026-09-03): none of the 3 actions below originally
+     * checked this — `Campaign::find()` returning null just fell straight
+     * into `isViewAllowed(null, ...)`, giving 403 for a missing campaign.
+     * Real legacy's `CampaignRepository::find()` THROWS for a missing id
+     * (a real `NotFoundError`, caught by `AdminDispatcher` into a genuine
+     * 404) — verified live against port 8090 (`campaign_id=0` -> 404
+     * "Traffic\Model\Campaign #0 not found", not 403). Matches the
+     * "resolve entity, 404 if missing, THEN check ACL" order every other
+     * ported controller already uses (e.g. `CampaignsController::
+     * showAction()`).
+     */
+    private function notFound(string $message = 'Not found'): Response
+    {
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
+    }
+
     // ---------------------------------------------------------------
     // Reference-data actions (LabelRepository::getLabelVariations()/
     // retRefNameVariations()) — no ACL, pure static catalogues.
@@ -166,7 +214,7 @@ class LabelsController extends Controller
         foreach (self::REF_NAME_TITLES as $value => $name) {
             $items[] = ['value' => $value, 'name' => $name];
         }
-        for ($i = 1; $i <= 10; $i++) {
+        for ($i = 1; $i <= self::SUB_ID_COUNT; $i++) {
             $items[] = ['value' => "sub_id_{$i}", 'name' => "Sub ID {$i}"];
         }
 
@@ -177,10 +225,14 @@ class LabelsController extends Controller
     // Actions
     // ---------------------------------------------------------------
 
-    public function indexAction(Request $request): Response
+    public function indexAction(Request $request): Response|array|null
     {
         $campaignId = (int) $this->param($request, 'campaign_id');
         $campaign = Campaign::find($campaignId);
+
+        if (! $campaign) {
+            return $this->notFound("Traffic\\Model\\Campaign #{$campaignId} not found");
+        }
         $refName = (string) $this->param($request, 'ref_name');
         $labelName = $this->param($request, 'label_name');
 
@@ -203,12 +255,17 @@ class LabelsController extends Controller
         }
 
         if (empty($labels)) {
-            // Legacy `indexAction()` returns bare PHP `null` (not `[]`/`{}`)
-            // when there are no labels. Encoded manually since
-            // response()->json(null) would serialize as `{}`, not `null`
-            // (see UserPreferencesController::getAction()'s docblock for
-            // why — Symfony's JsonResponse rewrites a null $data argument).
-            return response(json_encode(null))->header('Content-Type', 'application/json');
+            // CORRECTION (2026-09-03): legacy's `indexAction()` returns
+            // bare PHP `null`, which `ObjectDispatchController`'s generic
+            // non-array/object passthrough casts to `(string) null` — an
+            // EMPTY body (0 bytes), not the 4-byte text "null". A prior
+            // version of this branch built that literal text manually
+            // (`response(json_encode(null))`), verified live against
+            // legacy port 8090 to be wrong (real legacy response body is
+            // empty). Returning the bare `null` here lets the dispatcher's
+            // same generic cast produce the correct empty body, same
+            // fix-shape as `UserPreferencesController::getAction()`.
+            return null;
         }
 
         return response()->json($labels);
@@ -218,6 +275,10 @@ class LabelsController extends Controller
     {
         $campaignId = (int) $this->param($request, 'campaign_id');
         $campaign = Campaign::find($campaignId);
+
+        if (! $campaign) {
+            return $this->notFound("Traffic\\Model\\Campaign #{$campaignId} not found");
+        }
         $refName = (string) $this->param($request, 'ref_name');
         $items = $this->param($request, 'items', []);
 
@@ -261,6 +322,10 @@ class LabelsController extends Controller
     {
         $campaignId = (int) $this->param($request, 'campaign_id');
         $campaign = Campaign::find($campaignId);
+
+        if (! $campaign) {
+            return $this->notFound("Traffic\\Model\\Campaign #{$campaignId} not found");
+        }
         $refName = (string) $this->param($request, 'ref_name');
         $refValues = $this->param($request, 'ref_values', []);
         $labelName = $this->param($request, 'label_name');

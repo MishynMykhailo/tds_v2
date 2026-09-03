@@ -64,13 +64,18 @@ it('returns the ref_name catalogue', function () {
     $response->assertStatus(200);
     $values = array_column($response->json(), 'value');
 
-    foreach (['ip', 'source', 'x_requested_with', 'ad_campaign_id', 'creative_id', 'keyword', 'sub_id_1', 'sub_id_10'] as $expected) {
+    // Verified live against legacy port 8090: real legacy returns 15
+    // sub_id_N entries here (this port's `clicks` table has all 15
+    // sub_id_N_id columns, same schema condition legacy's own
+    // ParameterRepository::hasSubId15() checks) - a prior version of this
+    // test capped it at 10.
+    foreach (['ip', 'source', 'x_requested_with', 'ad_campaign_id', 'creative_id', 'keyword', 'sub_id_1', 'sub_id_10', 'sub_id_15'] as $expected) {
         expect($values)->toContain($expected);
     }
-    expect($values)->not->toContain('sub_id_11');
+    expect($values)->not->toContain('sub_id_16');
 });
 
-it('returns null when there are no labels for the campaign/ref_name', function () {
+it('returns an empty body when there are no labels for the campaign/ref_name', function () {
     $campaign = CampaignFactory::new()->create();
 
     $response = $this->getJson(labelsEndpoint('index', [
@@ -79,7 +84,10 @@ it('returns null when there are no labels for the campaign/ref_name', function (
     ]));
 
     $response->assertStatus(200);
-    expect($response->getContent())->toBe('null');
+    // Verified live against legacy port 8090: real legacy returns a
+    // genuinely EMPTY (0-byte) body here, not the text "null" - a prior
+    // version of this test (and the action) got that wrong.
+    expect($response->getContent())->toBe('');
 });
 
 it('lists labels for a campaign/ref_name as a value => label_name map', function () {
@@ -210,11 +218,15 @@ it('denies a guest (no current user) access with a 403', function () {
     $response->assertStatus(403);
 });
 
-it('returns 403 for a non-existent campaign', function () {
+it('returns 404 for a non-existent campaign', function () {
+    // Verified live against legacy port 8090: CampaignRepository::find()
+    // throws a real NotFoundError for a missing id -> 404, not 403 (a
+    // prior version of this action let a null campaign fall straight
+    // into the ACL check instead).
     $response = $this->getJson(labelsEndpoint('index', [
         'campaign_id' => 999999,
         'ref_name' => 'source',
     ]));
 
-    $response->assertStatus(403);
+    $response->assertStatus(404);
 });
