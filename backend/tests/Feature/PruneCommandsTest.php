@@ -4,8 +4,10 @@ use App\Models\Click;
 use App\Models\ClickLink;
 use App\Models\Conversion;
 use App\Models\Setting;
+use App\Models\StreamEvent;
 use App\Models\UserPasswordHash;
 use Database\Factories\CampaignFactory;
+use Database\Factories\TriggerFactory;
 use Database\Factories\UserFactory;
 use Illuminate\Support\Facades\DB;
 
@@ -136,3 +138,32 @@ it('app:prune-expired-password-hashes deletes only expired rows', function () {
     expect(UserPasswordHash::find($expired->id))->toBeNull();
     expect(UserPasswordHash::find($valid->id))->not->toBeNull();
 });
+
+it('app:prune-stream-events deletes only monitoring_history rows older than 30 days', function () {
+    $trigger = TriggerFactory::new()->create();
+
+    $old = StreamEvent::create([
+        'level' => 'info', 'stream_id' => $trigger->stream_id, 'trigger_id' => $trigger->id,
+        'message' => 'old', 'date' => now()->subDays(31), 'state' => 'read',
+    ]);
+    $recent = StreamEvent::create([
+        'level' => 'info', 'stream_id' => $trigger->stream_id, 'trigger_id' => $trigger->id,
+        'message' => 'recent', 'date' => now()->subDays(29), 'state' => 'read',
+    ]);
+
+    $this->artisan('app:prune-stream-events')->assertExitCode(0);
+
+    expect(StreamEvent::find($old->id))->toBeNull();
+    expect(StreamEvent::find($recent->id))->not->toBeNull();
+});
+
+// app:prune-hit-limits is NOT covered here (deliberately - not an
+// oversight): it talks to a real Redis instance (the `traffic` connection,
+// config/database.php), and this Pest suite is designed to run fully
+// isolated on SQLite in-memory with no external services required
+// (phpunit.xml sets DB_CONNECTION=sqlite/:memory: precisely for that,
+// and no other test in this suite touches Redis either). Live-verified
+// instead against the real tds2-redis + tds2-mysql containers
+// (2026-09-03): a stream with no `limit`-filter `total` cap loses entries
+// older than 1 day, one with a `total` cap keeps its full history -
+// see docs/PORTING_LOG.md for the full write-up.

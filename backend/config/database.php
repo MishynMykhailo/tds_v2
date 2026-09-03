@@ -179,6 +179,27 @@ return [
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
         ],
 
+        // Unprefixed connection into the SAME Redis instance/DB (0) as
+        // traffic-core's TrafficCore\Redis\RedisClient (a separate
+        // Composer project with no shared code, see ARCHITECTURE_PLAN.md)
+        // — needed by App\Console\Commands\PruneHitLimits, which prunes
+        // the `rate:<stream_id>` sorted sets traffic-core writes at click
+        // time. The `default`/`cache` connections above are Laravel's own
+        // keyspace (real `prefix` option) and must never see raw
+        // traffic-core keys; this one is for reading/writing that shared
+        // keyspace directly, prefix-free like traffic-core's own client.
+        'traffic' => [
+            'url' => env('REDIS_URL'),
+            'host' => env('REDIS_HOST', '127.0.0.1'),
+            'username' => env('REDIS_USERNAME'),
+            'password' => env('REDIS_PASSWORD'),
+            'port' => env('REDIS_PORT', '6379'),
+            'database' => env('REDIS_DB', '0'),
+            'options' => [
+                'prefix' => '',
+            ],
+        ],
+
     ],
 
 ];

@@ -35,9 +35,19 @@ Artisan::command('inspire', function () {
 // triggers here, so an orphaned trigger (stream_id pointing at a
 // nonexistent stream) is structurally impossible in this schema — the
 // cleanup command would always be a provable no-op, not a real gap.
+//
+// Added later (2026-09-03, backlog "tails" pass): `PruneStreamEvents`
+// (monitoring_history, 30-day literal legacy period) and
+// `PruneHitLimits` (rate:<stream_id> Redis sets, 1-day legacy TTL) -
+// both previously listed as blocked, re-verified live that neither
+// actually was (their underlying tables/mechanisms were already real).
+// Both are also GENERAL_TYPE prune tasks in legacy's own PruneData
+// (1440 min = 24h) - `->daily()`, same as every other command here.
 // ---------------------------------------------------------------
 
 Schedule::command('app:prune-archived-entities')->daily();
 Schedule::command('app:prune-click-stats')->daily();
 Schedule::command('app:prune-expired-password-hashes')->daily();
 Schedule::command('app:prune-orphaned-data')->daily()->at('03:30');
+Schedule::command('app:prune-stream-events')->daily();
+Schedule::command('app:prune-hit-limits')->daily();

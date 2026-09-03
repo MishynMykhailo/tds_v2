@@ -10,7 +10,8 @@
         "chrome-php/chrome": "^1.16",
         "firebase/php-jwt": "^7.1",
         "laravel/framework": "^13.17",
-        "laravel/tinker": "^3.0"
+        "laravel/tinker": "^3.0",
+        "predis/predis": "^3.0"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
