@@ -2166,4 +2166,73 @@ form-urlencoded тело НЕ парсится легаси в массив (`cr
 — 397/397. `php -l` чисто.
 
 ---
+
+## GeoDb контрактный тест — НЕЗАВЕРШЁНО, разведка на середине (2026-09-03)
+
+Сессия прервана пользователем на этом месте ("сделай пока /clear") —
+работа над `geoDbs`-контрактным тестом реально НАЧАТА (третий модуль
+после Labels/GeoProfiles), но НЕ доведена до теста/фикса/коммита. Ниже —
+всё, что уже успели найти живым curl, чтобы не передоказывать заново.
+
+**`geoDbs.index` — живое сравнение легаси (порт 8090) vs новый бэкенд
+(порт 8010)**:
+- Легаси: `{"id","name","type","exists","path","data_types",
+  "status_code","status_text","time","is_recommended","setting_key",
+  "purchase_link","key","error"}` — ПОСЛЕДНЕЕ поле `error` (например
+  `"[ip2location_lite] Error while request db, status: 404"` — это
+  реальная попытка живого сетевого запроса на сайт провайдера для
+  проверки обновлений, которая тут падает 404, т.к. окружение не имеет
+  доступа/лицензии).
+- Новый бэкенд: те же поля КРОМЕ `error`, но есть лишние `installed`
+  (bool) и `update_available` (null) вместо `error`. `exists=false` у
+  ip2location_lite несмотря на реально существующий на диске файл — НЕ
+  проверено, баг это или нет (не успели разобраться, файл `var/geoip/
+  IP2Location/lite/IP2LOCATION-LITE-DB3.BIN` в момент последнего теста
+  был на месте, 48MB, только что восстановлен второй раз в этой сессии
+  — см. ниже про "ловушку с файлом").
+- **НЕ выяснено**: (а) реальный ли это баг `exists`/`installed` или
+  ожидаемое расхождение (сетевой check недостижим в обеих средах,
+  просто по-разному сериализован); (б) откуда взялись
+  `installed`/`update_available` — новая, недокументированная добавка
+  или замена `error`; (в) что должно быть в `time` (null у нас, реальный
+  filemtime раньше подтверждался работающим по докам раздела 3.1
+  BACKEND_REMAINING_WORK.md — возможно, `exists=false` — причина, из-за
+  которой `time` тоже null, замкнутый круг, нужно сначала понять exists).
+
+**`geoDbs.settings`** — оба таргета вернули ИДЕНТИЧНЫЙ JSON
+(`{"0":null,...,"8":null,"country":"ip2location_lite",...}"`) — этот
+кусок, похоже, уже рабочий 1:1, не нужно чинить, только written contract
+test.
+
+**ВАЖНАЯ ЛОВУШКА (для следующей сессии, чуть не наступили дважды)**:
+`backend/var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN` — реальный
+48MB geoip-файл, НЕ в git (untracked, `var/` в .gitignore), скопирован
+вручную кем-то до этой сессии из легаси-репо. Живой ручной upload-тест
+`geoDbs.upload` (раздел 3.1 BACKEND_REMAINING_WORK.md) перезаписывает
+ЭТОТ ЖЕ путь тестовым мусором — если тестируешь `geoDbs.upload` живым
+curl (не через Pest `afterEach`, который сам чистит), **обязательно
+восстанови файл после**: `cp "./var/geoip/IP2Location/lite/
+IP2LOCATION-LITE-DB3.BIN" "/Users/mykhailomishyn/Documents/trafox/
+tds_v2/backend/var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN"`
+(легаси-репо — эталонная нетронутая копия, всегда доступна по
+относительному пути от дефолтного cwd). В этой сессии файл дважды
+оказывался пустой директорией без него (возможно, что-то в
+Pest-сьюте/фикстурах его трогает — НЕ выяснено, что именно, стоит
+поискать `afterEach`/`tearDown` в `GeoDbsTest.php`, который может
+удалять файл по общему пути раньше, чем ожидается, или отдельный
+скрипт/тест, запущенный в этой сессии, задел его).
+
+Следующие шаги: (1) разобраться с ловушкой файла — найти, что его
+удаляет; (2) разобраться с `exists`/`installed`/`error` vs
+`update_available` расхождением в `geoDbs.index` — почитать
+`GeoDbSerializer`/`GeoDbRepository::all()` в легаси и сравнить с портом
+дословно, не гадая; (3) дописать `backend/tests/Feature/GeoDbsTest.php`
+(тесты там уже есть, 18 штук — просто перепроверить, не пропущено ли
+что-то) + `tests-contract/tests/GeoDbsTest.php` (ещё не создан); (4)
+после GeoDb — Conversions, Reports, Editor, Cleaner,
+ThirdPartyIntegration-кластер, CodePresets, KClientJsPreset, Macros,
+Branding, IpInfoDataTypes — по списку из BACKEND_REMAINING_WORK.md
+раздела 6.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
