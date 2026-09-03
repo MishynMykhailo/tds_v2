@@ -59,13 +59,13 @@ it('returns success:false for a non-POST request without deleting anything', fun
     expect(json_decode($response->getContent(), true))->toBe(['success' => false]);
 });
 
-it('rejects missing start_date/end_date with a 406', function () {
+it('reports missing start_date/end_date as a plain 200 {success:false}, NOT a 406 - verified live against legacy source (an ordinary return, not the ValidationError throw)', function () {
     actingAsForCleaner(UserFactory::new()->admin()->create());
 
     $response = callClean(['start_date' => '2024-01-01']);
 
-    expect($response->getStatusCode())->toBe(406);
-    expect(json_decode($response->getContent(), true)['success'])->toBeFalse();
+    expect($response->getStatusCode())->toBe(200);
+    expect(json_decode($response->getContent(), true))->toBe(['success' => false, 'error' => 'Invalid format date']);
 });
 
 it('rejects an invalid date format with a 406', function () {
@@ -115,6 +115,25 @@ it('denies cleaning a campaign the user is not allowed to edit', function () {
     ]);
 
     expect($response->getStatusCode())->toBe(403);
+});
+
+// REAL BUG, found live against legacy port 8090 (2026-09-03): was
+// treated the same as "found but not allowed" (403) - real legacy's
+// CampaignRepository::find() throws a real NotFoundError before
+// isEditAllowed() is ever reached, same class of fix already applied
+// to Labels/GeoProfiles/Reports for their own campaign_id lookups.
+it('returns a real 404 for a non-existent campaign_id, not a 403', function () {
+    actingAsForCleaner(UserFactory::new()->admin()->create());
+    $missingId = 999999999;
+
+    $response = callClean([
+        'start_date' => '2024-01-01',
+        'end_date' => '2024-01-31',
+        'campaign_id' => $missingId,
+    ]);
+
+    expect($response->getStatusCode())->toBe(404);
+    expect(json_decode($response->getContent(), true)['error'])->toBe("Traffic\\Model\\Campaign #{$missingId} not found");
 });
 
 it('allows cleaning a campaign the user has full_access to and scopes deletion to it', function () {

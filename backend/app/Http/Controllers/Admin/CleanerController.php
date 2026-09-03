@@ -94,6 +94,23 @@ class CleanerController extends Controller
     }
 
     /**
+     * REAL BUG, found live against legacy port 8090 (2026-09-03): a
+     * non-existent `campaign_id` was treated the same as "found but not
+     * allowed" (403) — real legacy's `CampaignRepository::find()` (the
+     * same `Core\Entity\Repository\EntityRepository::find()` every other
+     * entity lookup in this codebase already replicates as a 404, e.g.
+     * Labels/GeoProfiles/Reports) throws a real `NotFoundError` before
+     * `isEditAllowed()` is ever reached — confirmed live, exact message
+     * `"Traffic\Model\Campaign #<id> not found"`.
+     */
+    private function campaignNotFound(int $campaignId): Response
+    {
+        $message = "Traffic\\Model\\Campaign #{$campaignId} not found";
+
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
+    }
+
+    /**
      * Legacy `_validateDate()` throwing `Core\Validator\ValidationError`
      * with the literal `["success" => false, "error" => "Invalid format
      * date"]` payload — NOT the generic field-map {field: [msg]} shape used
@@ -120,8 +137,17 @@ class CleanerController extends Controller
         $startDate = $this->param($request, 'start_date');
         $endDate = $this->param($request, 'end_date');
 
+        // REAL BUG, found live against legacy port 8090 (2026-09-03): this
+        // was returning the same 406 as the invalid-date-FORMAT branch
+        // below, but real legacy's missing-start/end-date check is a
+        // plain `return [...]` (application/Component/Cleaner/Controller/
+        // CleanerController.php) - an ordinary controller return, HTTP
+        // 200 - NOT the `_validateDate()` throw a few lines later, which
+        // really is a `Core\Validator\ValidationError` (fixed 406, §6).
+        // Same {success, error} body either way, only the status code
+        // was wrong.
         if (! $startDate || ! $endDate) {
-            return response()->json(['success' => false, 'error' => 'Invalid format date'], 406);
+            return response()->json(['success' => false, 'error' => 'Invalid format date']);
         }
 
         if (! $this->isValidDate($startDate, $timezone) || ! $this->isValidDate($endDate, $timezone)) {
@@ -133,7 +159,11 @@ class CleanerController extends Controller
         if (! empty($campaignId)) {
             $campaign = Campaign::find((int) $campaignId);
 
-            if (! $campaign || ! $this->aclService->isEditAllowed($this->currentUserService->get(), $campaign)) {
+            if (! $campaign) {
+                return $this->campaignNotFound((int) $campaignId);
+            }
+
+            if (! $this->aclService->isEditAllowed($this->currentUserService->get(), $campaign)) {
                 return $this->forbidden();
             }
 
