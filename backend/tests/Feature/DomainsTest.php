@@ -72,27 +72,45 @@ it('shows an active domain with every model field', function () {
     expect($data)->toHaveKey('campaigns_count');
 });
 
-it('returns 404 for show of an archived (state != active) domain', function () {
+// Literal legacy quirk, verified live against the real legacy backend
+// directly (2026-09-03): `domains.show` NEVER 404s. A missing/nonexistent/
+// inactive-state id all resolve `findActive()` to null, and legacy
+// serializes that null anyway — HTTP 200, body missing id/name but still
+// carrying the `extra()` fields (campaigns_count/default_campaign/
+// error_solution). See DomainsController::showAction()'s own docblock.
+it('returns the missing-domain quirk shape for show of an archived (state != active) domain', function () {
     // Legacy `findActive($id)` filters on the generic `state` column (NOT
-    // `network_status`) — an archived domain 404s here even though its
-    // network_status may still say "active".
+    // `network_status`) — an archived domain hits the same quirk below
+    // even though its network_status may still say "active".
     $domain = DomainFactory::new()->archived()->create();
 
     $response = $this->getJson(domainsEndpoint('show', ['id' => $domain->id]));
 
-    $response->assertStatus(404);
+    $response->assertStatus(200);
+    $body = $response->json();
+    expect($body)->not->toHaveKey('id');
+    expect($body)->not->toHaveKey('name');
+    expect($body)->toHaveKeys(['campaigns_count', 'default_campaign', 'error_solution']);
 });
 
-it('returns 404 for show without a valid id', function () {
+it('returns the missing-domain quirk shape for show without a valid id', function () {
     $response = $this->getJson(domainsEndpoint('show'));
 
-    $response->assertStatus(404);
+    $response->assertStatus(200);
+    $body = $response->json();
+    expect($body)->not->toHaveKey('id');
+    expect($body)->not->toHaveKey('name');
+    expect($body)->toHaveKeys(['campaigns_count', 'default_campaign', 'error_solution']);
 });
 
-it('returns 404 for show with a non-existent id', function () {
+it('returns the missing-domain quirk shape for show with a non-existent id', function () {
     $response = $this->getJson(domainsEndpoint('show', ['id' => 999999]));
 
-    $response->assertStatus(404);
+    $response->assertStatus(200);
+    $body = $response->json();
+    expect($body)->not->toHaveKey('id');
+    expect($body)->not->toHaveKey('name');
+    expect($body)->toHaveKeys(['campaigns_count', 'default_campaign', 'error_solution']);
 });
 
 it('creates a domain given a valid name, forcing is_ssl false and network_status validating', function () {
@@ -102,7 +120,11 @@ it('creates a domain given a valid name, forcing is_ssl false and network_status
 
     $response->assertStatus(200);
 
-    $data = $response->json();
+    // Legacy `createMultiple()` responds with an ARRAY of domains (one per
+    // comma-separated name) — confirmed live against real legacy
+    // (tests-contract/tests/DomainsTest.php, §10.7), holds even for the
+    // single-domain case this port supports.
+    $data = $response->json()[0];
     expect($data['name'])->toBe('example.com');
     expect($data['network_status'])->toBe('validating');
     expect($data['is_ssl'])->toBeFalse();
@@ -121,7 +143,7 @@ it('takes only the first comma-separated segment as the domain name on create', 
 
     $response->assertStatus(200);
 
-    $data = $response->json();
+    $data = $response->json()[0];
     expect($data['name'])->toBe('first.com');
 
     $this->assertDatabaseHas('domains', ['name' => 'first.com']);

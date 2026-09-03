@@ -358,18 +358,58 @@ findAction()` отсутствовал — добавлен. Полная ист
 PORTING_LOG.md` ("Разбор оставшихся контрактных падений"). Контрактный
 сьют против нового бэкенда: 40 → 15 падений.
 
-**Остаётся падать (15, другая причина — НЕ stacktrace, не разобрано)**:
-`ApiKeysTest` (2), `CampaignsTest`'s legacy-fixture smoke test (id=4 —
-не относится к свежей БД, можно игнорировать/пометить skip),
-`DomainsTest` (3 — `domains.create` возвращает массив из 23 элементов
-вместо 1, плюс id-less/несуществующий-id "не 404, а 200" legacy-quirk),
-`GroupsTest` (дубликат имени не отклоняется 406), `UserPreferencesTest`
-(1), `UsersTest` (3 — фикстура `users.create` падает на "new_password
-required", плюс `users.listAsOptions` отсутствует). Следующий шаг —
-разобрать каждое так же: живой curl + сверка с реальным легаси-
-источником (`tds-app`, порт 8090). Перезапуск: `TDS_TEST_TARGET=http://
-localhost:PORT vendor/bin/pest` в `tests-contract/`, бэкенд —
-`php artisan serve --port=PORT`.
+**DomainsTest — ЗАКРЫТО (2026-09-03, тот же день).** Разобрано и
+исправлено:
+- `domains.create` возвращал ОДИН объект вместо массива из 1 элемента.
+  Живьём подтверждено против легаси (`createMultiple()` реально всегда
+  отдаёт массив, даже для одного домена) — обёрнуто в `[...]`
+  (`DomainsController::createAction`), поправлены оба места в
+  `tests/Feature/DomainsTest.php`, использующие `$data['name']`
+  напрямую (теперь `$data = $response->json()[0]`).
+- `domains.show` без id / с несуществующим id / для archived-домена —
+  РАНЬШЕ отдавал 404 (осознанное "улучшение" предыдущей сессии,
+  задокументированное как "легаси-баг, не стоит сохранять"). Живьём
+  перепроверено против реального легаси (порт 8090) ДО правки:
+  подтверждено, что легаси РЕАЛЬНО отдаёт 200 с телом без id/name, но с
+  `campaigns_count`/`default_campaign`/`error_solution` (баг легаси, не
+  придуманный тестом) — контрактный тест был прав. Откачено обратно к
+  буквальному легаси-поведению (`DomainsController::showAction()` +
+  новый `serializeMissingDomain()`), поправлены 3 теста в `tests/
+  Feature/DomainsTest.php`, ожидавшие 404. **Урок**: не доверять
+  докблоку "это баг легаси, реальный клиент не пострадает" без живой
+  перепроверки — контрактный тест был единственным источником правды,
+  который действительно смотрел на реальный легаси.
+
+**Остаётся падать (11, живьём не разобрано, есть только первичный
+диагноз ниже — следующая сессия)**:
+- `ApiKeysTest` (2) — `apiKeys.add`/`apiKeys.delete` отдают 404. Похоже
+  на несуществующий/неправильно названный action (тот же паттерн, что
+  был у `ProfileController::indexAction` — проверить реальные имена
+  action'ов в легаси `Component\ApiKeys\Controller\ApiKeysController`).
+- `CampaignsTest`'s legacy-fixture smoke test (id=4, "qbrtcz2") — НЕ
+  относится к свежей БД, это historical-фикстура из другого окружения,
+  можно игнорировать/пометить `--group=smoke` как есть (тест сам себя
+  так описывает).
+- `GroupsTest` — дубликат имени группы не отклоняется 406 (нет
+  uniqueness-валидации на `groups.create`, надо сверить с легаси
+  `GroupValidator`/аналогом).
+- `UserPreferencesTest` (1, на деле 3 assertion-строки в одном месте) —
+  `userPreferences.get` отдаёт JSON-обёрнутое значение (`"value"` в
+  кавычках, `"null"` для отсутствующего) вместо RAW-строки без кавычек
+  (контроллер, похоже, зовёт `response()->json($value)` вместо
+  `response($value)`/plain-text).
+- `UsersTest` (3) — `Fixtures::createUser()` шлёт payload без
+  `new_password`, но `UsersController::createAction` теперь требует
+  его 406-кой ("The new password field is required") — сверить с
+  легаси: обязателен ли `new_password` при СОЗДАНИИ (а не смене пароля
+  существующего юзера)? Плюс `users.listAsOptions` — легаси такого
+  action не имеет (тест ожидает 404), новый бэкенд отдаёт 200 —
+  проверить, реально ли добавлен лишний action или тест ошибается.
+
+Перезапуск для разбора: `TDS_TEST_TARGET=http://localhost:PORT
+vendor/bin/pest` в `tests-contract/`, бэкенд — `php artisan serve
+--port=PORT`, легаси для сверки уже поднят постоянно в Docker
+(`tds-app`, порт 8090, логин `admin`/`TdsAdmin2026!`).
 
 Уже покрыты (документные, теперь и реально работающие против нового
 бэкенда): Auth, Groups, Campaigns, Streams, Offers, Domains,

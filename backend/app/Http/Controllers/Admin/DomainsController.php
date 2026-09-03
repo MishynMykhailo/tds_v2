@@ -202,6 +202,26 @@ class DomainsController extends Controller
         return $data;
     }
 
+    /**
+     * `showAction()`'s literal-legacy-quirk response for a missing/
+     * nonexistent/inactive domain id — see that method's docblock. Only
+     * the three `extra()` fields `DomainSerializer::extra()` still
+     * computes against a null `$domain` (`campaigns_count`: legacy's
+     * dictionary lookup keyed by the absent id hits the "no domain
+     * assigned" bucket, i.e. `domain_id IS NULL`; `default_campaign`:
+     * always `''`, no `default_campaign_id` to resolve; `error_solution`:
+     * already always `''` even for a real domain, see `serializeDomain()`).
+     * No `id`/`name`/any other raw column key at all.
+     */
+    private function serializeMissingDomain(): array
+    {
+        return [
+            'campaigns_count' => Campaign::query()->whereNull('domain_id')->count(),
+            'default_campaign' => '',
+            'error_solution' => '',
+        ];
+    }
+
     // ---------------------------------------------------------------
     // Actions
     // ---------------------------------------------------------------
@@ -225,28 +245,28 @@ class DomainsController extends Controller
     {
         $id = $this->param($request, 'id');
 
-        if (empty($id)) {
-            return $this->notFound('Domain not found');
-        }
-
         // Legacy `findActive($id)`: id match AND state == active (NOT a
-        // plain find()) — an archived/deleted domain 404s here even if the
-        // id exists.
+        // plain find()) — an archived/deleted domain hits the same
+        // "not found" quirk below even if the id exists.
         //
-        // INTENTIONAL DEVIATION (verified live against the old backend by
-        // the contract-test suite): legacy does NOT 404 here on a missing/
-        // nonexistent id — `findActive()` silently returns null, and the
-        // serializer runs on that null anyway, producing HTTP 200 with a
-        // body missing id/name but still carrying a bogus non-zero
-        // `campaigns_count` (a dictionary lookup keyed by the absent id
-        // happens to hit the "no domain assigned" bucket). That's a clear
-        // legacy bug, not a behavior worth preserving — a real 404 here is
-        // objectively better and no real client depends on the broken
-        // shape. Documented, not silently drifted.
-        $domain = Domain::query()->where('id', (int) $id)->where('state', 'active')->first();
+        // LITERAL LEGACY QUIRK, verified live against the real legacy
+        // backend directly (2026-09-03, not just the contract-test's own
+        // claim): a missing/nonexistent id does NOT 404 here at all —
+        // `findActive()` returns null and the serializer runs on that null
+        // anyway, producing HTTP 200 with a body missing id/name but still
+        // carrying a non-zero `campaigns_count` (a dictionary lookup keyed
+        // by the absent id happens to hit the "no domain assigned"
+        // bucket). An earlier version of this method "improved" this to a
+        // real 404 — reverted: the contract test's own docblock already
+        // warned not to do that without re-verifying live first, which
+        // this session did (curl against the real legacy instance,
+        // confirmed identical for both an absent AND a nonexistent id).
+        $domain = empty($id)
+            ? null
+            : Domain::query()->where('id', (int) $id)->where('state', 'active')->first();
 
         if (! $domain) {
-            return $this->notFound('Domain not found');
+            return response()->json($this->serializeMissingDomain());
         }
 
         if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $domain)) {
@@ -311,12 +331,16 @@ class DomainsController extends Controller
         // isCreateAllowed() above already guarantees a non-null current user.
         $this->aclService->addAuthorPermission($this->currentUserService->get(), $domain);
 
-        // Legacy `createMultiple()` can return several domains (one per
-        // comma-separated name) — collapsed to a single domain here per the
-        // "no domains feature" TODO above, so a single serialized object is
-        // returned instead of an array (matches the reduced single-domain
-        // scope, not the raw legacy array response shape).
-        return response()->json($this->serializeDomain($domain));
+        // Legacy `createMultiple()` returns an ARRAY of domains (one per
+        // comma-separated name) — confirmed live against the real legacy
+        // backend (tests-contract/tests/DomainsTest.php, §10.7) that this
+        // wrapping array shape holds even for the single-domain case this
+        // port supports (no "no domains feature" exemption from the shape,
+        // only from actually creating more than one). Found live
+        // (2026-09-03): this previously returned a bare object instead,
+        // breaking the contract test that asserts `toBeArray()->
+        // toHaveCount(1)`.
+        return response()->json([$this->serializeDomain($domain)]);
     }
 
     public function updateAction(Request $request): Response
