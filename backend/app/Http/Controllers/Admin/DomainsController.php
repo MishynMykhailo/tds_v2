@@ -292,6 +292,12 @@ class DomainsController extends Controller
             $fill['ssl_status'] = 'awaiting_dns';
         }
         $fill['network_status'] = 'validating';
+        // `domains.state` has no DB-level default (unlike campaigns/
+        // streams) — found live via tests-contract/: a freshly created
+        // domain with no explicit `state` param silently got `state =
+        // NULL`, invisible to every listing query afterward. Legacy
+        // always creates as 'active'.
+        $fill['state'] ??= 'active';
 
         $domain = new Domain();
         $domain->fill($fill);

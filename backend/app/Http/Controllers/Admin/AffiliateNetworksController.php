@@ -260,6 +260,12 @@ class AffiliateNetworksController extends Controller
         }
 
         $fill = $this->fillableParams($params);
+        // `affiliate_networks.state` has no DB-level default (unlike
+        // campaigns/streams) — found live via tests-contract/: a freshly
+        // created affiliate network with no explicit `state` param
+        // silently got `state = NULL`, invisible to every listing query
+        // afterward. Legacy always creates as 'active'.
+        $fill['state'] ??= 'active';
         if (array_key_exists('pull_api_options', $fill)) {
             $fill['pull_api_options'] = $this->encodeJsonFieldForWrite($fill['pull_api_options']);
         }

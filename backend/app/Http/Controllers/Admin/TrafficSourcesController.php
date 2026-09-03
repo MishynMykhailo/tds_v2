@@ -262,6 +262,12 @@ class TrafficSourcesController extends Controller
         }
 
         $fill = $this->fillableParams($params);
+        // `traffic_sources.state` has no DB-level default (unlike
+        // campaigns/streams) — found live via tests-contract/: a freshly
+        // created traffic source with no explicit `state` param silently
+        // got `state = NULL`, invisible to every listing query
+        // afterward. Legacy always creates as 'active'.
+        $fill['state'] ??= 'active';
         if (array_key_exists('parameters', $fill)) {
             $fill['parameters'] = $this->encodeJsonFieldForWrite($fill['parameters']);
         }

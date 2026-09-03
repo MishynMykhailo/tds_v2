@@ -316,24 +316,66 @@ production install script для системы, которая ещё меня�
 
 ---
 
-## 6. Контрактные тесты — покрытие ~24 из ~43 контроллеров
+## 6. Контрактные тесты — покрытие ~25 из ~43 контроллеров
 
-`tests-contract/` — реальный dual-target (legacy vs new) contract-suite
-на Guzzle. Уже покрыты: Auth, Groups, Campaigns, Streams, Offers,
-Domains, TrafficSources, Users, Settings, ApiKeys, Triggers,
-FavouriteStreams, StreamFilters/Actions/Events/Types/Schemas, Dics,
-Profile, UserPreferences, AffiliateNetworks, Landings (~24).
+**КРИТИЧЕСКАЯ НАХОДКА (2026-09-03): весь `tests-contract/` сьют был
+СЛОМАН против нового бэкенда с самого начала, "покрытие ~24 модулей"
+никогда реально не проверялось живьём против Laravel-порта.**
+`tests/Support/ApiClient.php` строил `base_uri` как `{target}/admin/`
+(без `index.php`) — легаси (реальный Apache/аналог, DirectoryIndex)
+это прощал, но новый бэкенд (`Route::match(..., '/admin/index.php', ...)`
+— только этот один точный путь, без directory-index фолбэка) отвечал
+голым 404 на КАЖДЫЙ запрос, включая `auth.login` в `beforeEach` —
+т.е. вообще ни один тест ни разу не доходил до реальной проверки
+контракта против нового бэкенда. Исправлено (один файл,
+`ApiClient.php`) + подтверждено живьём: `GroupsTest`/`BotlistTest`
+теперь проходят на 100% против ОБОИХ таргетов.
 
-**НЕ покрыты** (в основном — то, что добавляли поздние фоновые агенты):
-GeoDb, GeoProfiles, Conversions, Reports, Editor, Cleaner, весь кластер
-ThirdPartyIntegration/CampaignIntegration (TPI, TpiMandatory, Facebook/
-AppsFlyer-интеграции, CodePresets, KClientJsPreset), Botlist, Macros,
-Branding, IpInfoDataTypes, Labels.
+После починки полный прогон против нового бэкенда впервые дал реальный
+сигнал: **40 из 93 тестов падали.** Основная причина (найдена и
+исправлена в этой же сессии) — `landings`/`offers`/`domains`/
+`traffic_sources`/`affiliate_networks`.`state` не имели DB-уровня
+дефолта (в отличие от `campaigns`/`streams`, у которых есть
+`->default('active')`) — свежесозданная запись получала `state=NULL`,
+что делало её невидимой в `WHERE state='active'`/`!='deleted'`
+листингах. Исправлено добавлением `$fill['state'] ??= 'active';` в
+`createAction()` всех 5 контроллеров (App-уровень, не миграция —
+`ALTER TABLE MODIFY` не портируется на SQLite, которым гоняется
+Pest-сьют) + бэкофилл существующих NULL-строк в общей dev-БД. После
+фикса: Landings/Offers полностью зелёные, Domains — частично.
 
-Задача: писать контрактные тесты по образцу уже существующих (смотреть
-`tests-contract/tests/` на любой уже покрытый модуль как шаблон) для
-каждого из непокрытых — сверяя реальный ответ старого приложения
-(`tds-app`, отдельный порт) и нового.
+**Остаётся падать (отдельная, НЕ исправленная в этой сессии причина)**:
+несколько тестов ожидают непустой `stacktrace` в error-респонсах
+(`{"error":..., "stacktrace": "..."}`), но многие контроллеры этого
+порта буквально хардкодят `'stacktrace' => ''` (см. `ConversionsController`/
+`CleanerController` и другие) — реальный ли это регресс контракта
+(легаси действительно кладёт непустой stacktrace?) или тест написан по
+неверному предположению — не выяснено, нужен отдельный разбор. Плюс
+несколько "domains.show без id / с несуществующим id — не 404, а 200"
+legacy-quirk-тестов, тоже не разобрано. Полный лог непочиненных
+падений: `/tmp/contract-new-backend-run.log` (эфемерный, не в репо —
+при необходимости перезапустить: `TDS_TEST_TARGET=http://localhost:PORT
+vendor/bin/pest` в `tests-contract/`, бэкенд поднять `php artisan
+serve`).
+
+Уже покрыты (документные, теперь и реально работающие против нового
+бэкенда): Auth, Groups, Campaigns, Streams, Offers, Domains,
+TrafficSources, Users, Settings, ApiKeys, Triggers, FavouriteStreams,
+StreamFilters/Actions/Events/Types/Schemas, Dics, Profile,
+UserPreferences, AffiliateNetworks, Landings, **Botlist (новое, эта
+сессия)**.
+
+**НЕ покрыты**: GeoDb, GeoProfiles, Conversions, Reports, Editor,
+Cleaner, весь кластер ThirdPartyIntegration/CampaignIntegration (TPI,
+TpiMandatory, Facebook/AppsFlyer-интеграции, CodePresets,
+KClientJsPreset), Macros, Branding, IpInfoDataTypes, Labels.
+
+Задача на будущее: (а) разобрать оставшиеся ~7 падений (stacktrace/
+domains-quirk) — вероятно, реальные мелкие расхождения контракта; (б)
+писать контрактные тесты по образцу `BotlistTest.php`/`GroupsTest.php`
+для каждого из непокрытых модулей — сверяя реальный ответ старого
+приложения (`tds-app`, отдельный порт) и нового, теперь что инструмент
+для этого реально работает.
 
 ---
 

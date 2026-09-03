@@ -1660,4 +1660,56 @@ Verification: полный живой pipeline (headless-shell + traffic-core
 384/384, `php -l` чисто.
 
 ---
+
+## Контрактные тесты — реальный запуск против нового бэкенда впервые (backlog 6) — 2026-09-03
+
+Добавил `tests-contract/tests/BotlistTest.php` (9 тестов, IP-list +
+UA-signature, оба независимых саб-фичи `BotlistController`). При
+живом прогоне против нового бэкенда (`php artisan serve`) обнаружил,
+что `beforeEach`'s `auth.login` падал 404 — то есть НИ ОДИН тест из
+уже существующих ~24 "покрытых" модулей никогда реально не проходил
+против нового бэкенда, только против легаси. Причина: `tests/Support/
+ApiClient.php`'s `base_uri = "{target}/admin/"` (без `index.php`) —
+новый бэкенд (`Route::match(..., '/admin/index.php', ...)`, точный
+путь, без directory-index фолбэка, который легаси прощает через
+реальный веб-сервер) отвечал 404 на любой запрос. Исправлено (добавлен
+`index.php` в base_uri), подтверждено живьём против ОБОИХ таргетов
+(`GroupsTest`/`BotlistTest` — 100% на legacy И на новом бэкенде).
+
+Также обнаружил и исправил: тестовый `admin`-юзер в общей dev-БД был
+создан через `DatabaseSeeder`'s `User::factory()->admin()` с рандомным
+паролем — не совпадал с `ApiClient::DEFAULT_PASSWORD` ("TdsAdmin2026!",
+который тест-сьют предполагает как известный fixture-пароль с самого
+начала, судя по докблоку константы). Обновил пароль этого dev-only
+юзера через `Hash::make()`, чтобы сьют вообще мог логиниться.
+
+После починки полный прогон (93 теста) впервые дал реальный сигнал:
+40 падений. Разобрал корневую причину для большинства —
+`landings`/`offers`/`domains`/`traffic_sources`/`affiliate_networks`.
+`state` объявлены `->nullable()` БЕЗ дефолта в своих миграциях (в
+отличие от `campaigns`/`streams`, у которых `->default('active')`)
+— свежесозданная запись получала `state=NULL`, что молча исключало её
+из любого `WHERE state='active'`/`!='deleted'` листинга (NULL в SQL —
+ни true, ни false). Рассматривал миграцию с `ALTER TABLE MODIFY`, но
+это MySQL-only синтаксис, ломает SQLite (на котором гоняется Pest) —
+вместо этого добавил `$fill['state'] ??= 'active';` в `createAction()`
+всех 5 контроллеров (App-уровень, тот же паттерн, что уже был в
+`StreamsController.php:805` для `StreamLandingAssociation`), плюс
+бэкофилл существующих NULL-строк в общей dev-БД прямым `UPDATE`.
+
+После фикса: Landings/Offers полностью зелёные против нового бэкенда,
+Domains частично (падения там — другая причина, id-less/несуществующий
+id "не 404, а 200" legacy-quirk, не разобрано). Ещё ~7 падений по
+всему сьюту — ожидание непустого `stacktrace` в error-респонсах, где
+код реально хардкодит `''` (найдено уже в ConversionsController/
+CleanerController ранее в этой же сессии) — реальный ли это регресс
+или неверное предположение теста, не выяснено, отдельная задача.
+
+Verification: полный `backend/./vendor/bin/pest` — 384/384 (мой фикс
+не сломал ничего). `tests-contract` — `BotlistTest`/`GroupsTest` 100%
+на обоих таргетах. Существующие NULL-строки в dev-БД (landings/offers/
+domains/traffic_sources/affiliate_networks) бэкофилены на 'active'.
+`php -l` чисто на всех изменённых файлах.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

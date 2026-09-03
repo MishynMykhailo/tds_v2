@@ -30,8 +30,20 @@ final class ApiClient
 
         $this->cookies = new CookieJar();
         $this->http = new Client([
-            // Admin panel is routed as ?object=controller.action under /admin/ — see §2.
-            'base_uri' => rtrim($baseUrl, '/') . '/admin/',
+            // Admin panel is routed as ?object=controller.action under
+            // /admin/index.php — see §2. The trailing `index.php` is
+            // REQUIRED, not cosmetic: found live (2026-09-03) that a bare
+            // `/admin/` base_uri silently 404s against the new Laravel
+            // backend (its only route is the literal `/admin/index.php`
+            // path, App\Http\Controllers\ObjectDispatchController — no
+            // directory-index fallback the way a real webserver in front
+            // of the legacy app provides for legacy's `/admin/`). This
+            // means the "new backend" side of every contract test in this
+            // suite has been silently unrunnable (immediate login 404)
+            // until this fix — legacy alone happened to still work via
+            // its webserver's own DirectoryIndex behavior, masking the
+            // bug. See docs/PORTING_LOG.md for the full write-up.
+            'base_uri' => rtrim($baseUrl, '/') . '/admin/index.php',
             'cookies' => $this->cookies,
             'http_errors' => false, // we assert status codes ourselves, incl. 403/404/406
             'timeout' => 15,

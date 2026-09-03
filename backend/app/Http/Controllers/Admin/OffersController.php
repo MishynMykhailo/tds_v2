@@ -370,6 +370,12 @@ class OffersController extends Controller
         }
 
         $fill = $this->fillableParams($params);
+        // `offers.state` has no DB-level default (unlike campaigns/
+        // streams) — found live via tests-contract/: a freshly created
+        // offer with no explicit `state` param silently got `state =
+        // NULL`, invisible to every `WHERE state = 'active'`/`!= 'deleted'`
+        // listing query afterward. Legacy always creates as 'active'.
+        $fill['state'] ??= 'active';
 
         try {
             $fill = $this->applyLocalFileType($params, $fill, null);
