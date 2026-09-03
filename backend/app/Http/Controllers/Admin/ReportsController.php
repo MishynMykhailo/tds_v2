@@ -433,7 +433,11 @@ class ReportsController extends Controller
         $campaign = Campaign::find($campaignId);
 
         if (! $campaign) {
-            return $this->notFound('Campaign not found');
+            // Exact legacy message (Core\Db\DataRepository::findRaw() ->
+            // NotFoundError), found live 2026-09-03 - same class of fix
+            // already applied to Labels/GeoProfiles this session (a
+            // generic "not found" doesn't match legacy's actual body).
+            return $this->notFound("Traffic\\Model\\Campaign #{$campaignId} not found");
         }
 
         if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $campaign)) {
@@ -478,7 +482,11 @@ class ReportsController extends Controller
         $campaign = Campaign::find($campaignId);
 
         if (! $campaign) {
-            return $this->notFound('Campaign not found');
+            // Exact legacy message (Core\Db\DataRepository::findRaw() ->
+            // NotFoundError), found live 2026-09-03 - same class of fix
+            // already applied to Labels/GeoProfiles this session (a
+            // generic "not found" doesn't match legacy's actual body).
+            return $this->notFound("Traffic\\Model\\Campaign #{$campaignId} not found");
         }
 
         if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $campaign)) {

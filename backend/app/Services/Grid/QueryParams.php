@@ -56,6 +56,26 @@ class QueryParams
         $params->columns = self::toStringArray($body['columns'] ?? []);
         $params->grouping = self::toStringArray($body['grouping'] ?? $body['dimensions'] ?? []);
         $params->metrics = self::toStringArray($body['metrics'] ?? []);
+
+        // REAL BUG, found live against legacy port 8090 (2026-09-03):
+        // a `metrics`-only request (no explicit `columns`) silently
+        // ignored `metrics` entirely for column selection and returned
+        // every column instead — confirmed via reports.summary with
+        // `{"metrics":["clicks"]}`: legacy returned just `{"clicks":
+        // "37"}`, this port returned the full ~20-field summary object.
+        // Real legacy `QueryParams::__construct()` unconditionally merges
+        // `columns ∪ grouping ∪ metrics` whenever `metrics` or `grouping`
+        // is present — not just as an empty-columns fallback (confirmed
+        // by reading application/Component/Grid/QueryParams/
+        // QueryParams.php:171-172 directly). Ported literally.
+        if (! empty($params->metrics) || ! empty($params->grouping)) {
+            $params->columns = array_values(array_unique(array_merge(
+                $params->columns,
+                $params->grouping,
+                $params->metrics,
+            )));
+        }
+
         $params->sort = is_array($body['sort'] ?? null) ? $body['sort'] : [];
         $params->filters = is_array($body['filters'] ?? null) ? $body['filters'] : [];
         $params->range = is_array($body['range'] ?? null) ? $body['range'] : null;
