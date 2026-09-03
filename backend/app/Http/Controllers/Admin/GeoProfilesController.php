@@ -109,19 +109,31 @@ class GeoProfilesController extends Controller
         return $this->indexAction($request);
     }
 
+    /**
+     * CORRECTION (2026-09-03): a prior version of this method claimed
+     * legacy returns literal JSON `null` (200) for a missing id — verified
+     * live against port 8090 and that's wrong: `GeoProfile::find($id)`
+     * (`Core\Model\AbstractModel::find()`, a static factory find, same as
+     * every other model in this codebase) THROWS a real `NotFoundError`
+     * for a missing row, giving a genuine 404 with a real stacktrace
+     * (`"Component\GeoProfiles\Model\GeoProfile #999999 not found"`), not
+     * a 200. `updateAction()` below already got this right independently.
+     */
     public function showAction(Request $request): Response
     {
         $id = (int) $request->input('id');
         $profile = GeoProfile::find($id);
 
-        // Legacy `showAction()` calls `serialize(null, ...)` when the id
-        // doesn't match anything, which the base serializer turns into a
-        // literal JSON `null` (200) — replicated as-is (this is a plain
-        // "not found" result, not a half-populated broken object like the
-        // Domains/ThirdPartyIntegration cases documented elsewhere in this
-        // log, so there is no reason to deviate here).
-        return response(json_encode($profile ? $this->serializeOne($profile) : null))
-            ->header('Content-Type', 'application/json');
+        if (! $profile) {
+            return $this->notFound("Component\\GeoProfiles\\Model\\GeoProfile #{$id} not found");
+        }
+
+        return response()->json($this->serializeOne($profile));
+    }
+
+    private function notFound(string $message): Response
+    {
+        return response()->json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 404);
     }
 
     public function createAction(Request $request): Response|array
@@ -150,7 +162,7 @@ class GeoProfilesController extends Controller
         $profile = GeoProfile::find($id);
 
         if (! $profile) {
-            return response()->json(['error' => 'Not found'], 404);
+            return $this->notFound("Component\\GeoProfiles\\Model\\GeoProfile #{$id} not found");
         }
 
         $params = $request->all();
@@ -175,7 +187,19 @@ class GeoProfilesController extends Controller
         // Legacy also gates on `ConfigService::isDemo()` — no "demo mode"
         // concept exists in this project, omitted.
         $id = (int) $request->input('id');
-        GeoProfile::where('id', $id)->delete();
+        $profile = GeoProfile::find($id);
+
+        // CORRECTION (2026-09-03): a prior version used a query-builder
+        // delete (`GeoProfile::where('id', $id)->delete()`), which matches
+        // zero rows silently for a bad id instead of erroring. Real legacy
+        // calls `GeoProfile::find($id)` first (same static factory find as
+        // show/update above), which throws for a missing row — verified
+        // live against port 8090 (404 with a real stacktrace).
+        if (! $profile) {
+            return $this->notFound("Component\\GeoProfiles\\Model\\GeoProfile #{$id} not found");
+        }
+
+        $profile->delete();
 
         return ['success' => true];
     }
