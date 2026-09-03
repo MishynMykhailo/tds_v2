@@ -126,7 +126,7 @@ describe('reports.parameterAliases / reports.statsForCampaign', function () {
             $body = ApiClient::json($response);
             expect($body)->toBe(['null' => ['clicks' => 0, 'stream_unique_clicks' => 0, 'bots' => 0]]);
         } finally {
-            $this->api->post('campaigns.delete', [], ['id' => $campaign['id']]);
+            $this->api->post('campaigns.update', [], ['id' => $campaign['id'], 'state' => 'deleted']);
         }
     });
 
@@ -138,7 +138,7 @@ describe('reports.parameterAliases / reports.statsForCampaign', function () {
             expect($response->getStatusCode())->toBe(200);
             expect(ApiClient::json($response))->toBe([]);
         } finally {
-            $this->api->post('campaigns.delete', [], ['id' => $campaign['id']]);
+            $this->api->post('campaigns.update', [], ['id' => $campaign['id'], 'state' => 'deleted']);
         }
     });
 });

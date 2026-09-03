@@ -108,7 +108,7 @@ describe('cleaner.clean — authorization', function () {
             ]);
             expect($response->getStatusCode())->toBe(403);
         } finally {
-            $this->api->post('campaigns.delete', [], ['id' => $campaign['id']]);
+            $this->api->post('campaigns.update', [], ['id' => $campaign['id'], 'state' => 'deleted']);
         }
     });
 

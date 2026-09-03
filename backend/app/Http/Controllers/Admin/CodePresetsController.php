@@ -118,16 +118,23 @@ class CodePresetsController extends Controller
             }
         }
 
-        $result = $found ? $this->prepare($found, $language) : null;
+        if (! $found) {
+            // CORRECTION (2026-09-03): a prior version of this returned a
+            // literal JSON "null" body (json_encode(null)) for an unknown
+            // id, citing the same fix already applied to
+            // UserPreferencesController::getAction() - but live-verified
+            // against legacy port 8090 that's wrong HERE: the real body
+            // is genuinely EMPTY (0 bytes), not the 4-byte string "null".
+            // Legacy's `get($id)` implicitly returns PHP `null` with no
+            // explicit `return`, which this codebase's dispatcher renders
+            // as a truly empty body elsewhere too (e.g.
+            // userPreferences.get for a missing pref_name) - the earlier
+            // "null" version here was itself the bug this project already
+            // fixed once, just not carried over to this action.
+            return response('', 200)->header('Content-Type', 'application/json');
+        }
 
-        // Legacy `get($id)` implicitly returns `null` (no `return` reached)
-        // when the id doesn't match anything — replicated as a literal JSON
-        // `null` body (200), not a 404, matching the legacy contract as-is.
-        // NOT built via `response()->json($result)`: this Laravel/Symfony
-        // version's `JsonResponse` rewrites a `null` `$data` argument into
-        // `{}` (see UserPreferencesController::getAction() for the same
-        // documented workaround) — encoding manually sidesteps that.
-        return response(json_encode($result))->header('Content-Type', 'application/json');
+        return response()->json($this->prepare($found, $language));
     }
 
     public function downloadClientAction(Request $request): Response

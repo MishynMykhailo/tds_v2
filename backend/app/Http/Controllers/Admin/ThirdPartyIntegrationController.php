@@ -235,10 +235,20 @@ class ThirdPartyIntegrationController extends Controller
             return $this->notFound('No ID provided');
         }
 
-        // Legacy `deleteById()` silently no-ops if the row doesn't exist,
-        // and the controller always returns `["success" => true]` when an
-        // id was provided at all — replicated as-is.
-        ThirdPartyIntegration::where('id', $id)->delete();
+        // CORRECTION (2026-09-03): a prior version of this docblock
+        // claimed legacy's `deleteById()` silently no-ops on a missing
+        // row - live-verified against port 8090 that's wrong:
+        // `ThirdPartyIntegrationService::deleteById()` -> `find()` really
+        // throws a NotFoundError first, exact message
+        // `"Component\ThirdPartyIntegration\Model\ThirdPartyIntegration
+        // #<id> not found"`, same as update/find above.
+        $integration = ThirdPartyIntegration::find($id);
+
+        if (! $integration) {
+            return $this->notFound("Component\\ThirdPartyIntegration\\Model\\ThirdPartyIntegration #{$id} not found");
+        }
+
+        $integration->delete();
 
         return response()->json(['success' => true]);
     }
