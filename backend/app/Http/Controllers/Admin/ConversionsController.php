@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Services\ConversionImportService;
 use App\Services\CurrentUserService;
 use App\Services\Grid\GridBuilder;
 use App\Services\Grid\QueryParams;
@@ -22,9 +23,10 @@ use Symfony\Component\HttpFoundation\Response;
  * docs/legacy-reference/frontend/api/00_common_routing_auth_acl_errors_grid.md
  * §9.
  *
- * Only `log`, `logDefinition` and `statuses` are backed by real logic this
- * round — `import` and `updateCostDefinition` are documented TODO stubs (see
- * their docblocks for why).
+ * `log`, `logDefinition`, `statuses`, and now `import` (see
+ * `App\Services\ConversionImportService`) are backed by real logic —
+ * `updateCostDefinition` remains a documented TODO stub (see its own
+ * docblock for why).
  */
 class ConversionsController extends Controller
 {
@@ -225,16 +227,13 @@ class ConversionsController extends Controller
     /**
      * Legacy `conversions.import` -> `ConversionsService::import($data,
      * $currency)` -> `{"errors": [...], "success": <int>, "total": <int>}`.
-     *
-     * TODO (documented stub, per task brief — "сложная логика импорта из
-     * внешних источников, не приоритет сейчас"): `ConversionsService` (bulk
-     * import from an external CRM/affiliate network feed, with per-row
-     * validation/error collection) has not been ported. The legacy
-     * parameter-presence check IS replicated (throws the same "empty
-     * data/currency" 406 shape as the rest of this codebase's
-     * ValidationError convention) since it's cheap and gives callers a
-     * correct error for the common "forgot a field" case; the actual import
-     * logic returns 501 instead of silently pretending to succeed.
+     * See `App\Services\ConversionImportService` for the real port (CSV-
+     * style `sub_id,revenue[,tid][,status]` rows, one per line, run
+     * through the same find-or-update-by-sub_id semantics as a live
+     * postback) and its docblock for the one deliberate scope-down
+     * (currency conversion — no exchange-rate infra exists anywhere in
+     * this project, `$currency` is required but has no effect on the
+     * stored revenue).
      */
     public function importAction(Request $request): Response
     {
@@ -245,9 +244,7 @@ class ConversionsController extends Controller
             return ResponseFacade::json(['error' => 'Import data or currency is empty', 'stacktrace' => ''], 406);
         }
 
-        return ResponseFacade::json([
-            'error' => 'Conversions import is not implemented yet (ConversionsService has not been ported — see App\Http\Controllers\Admin\ConversionsController::importAction docblock).',
-        ], 501);
+        return ResponseFacade::json((new ConversionImportService())->import($data));
     }
 
     /**

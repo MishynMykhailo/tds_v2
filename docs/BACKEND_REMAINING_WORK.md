@@ -146,14 +146,39 @@ don't just please".
 358/358, `php -l` чисто.
 
 ### 3.2 Conversions — import и updateCostDefinition
-`backend/app/Http/Controllers/Admin/ConversionsController.php`:
-- `importAction` — явный 501, зависит от непортированного
-  `Component\Clicks\Grid\ClicksDefinition`/`ConversionsService`
-  (легаси: "сложная логика импорта из CSV/файла").
-- `updateCostDefinitionAction` — то же самое, та же зависимость.
 
-`log`/`logDefinition`/`statuses` в этом же контроллере уже реальны и
-работают — портировать нужно именно эти два метода.
+**`importAction` — ЗАКРЫТО (2026-09-03).** Реализован
+`App\Services\ConversionImportService` — порт легаси
+`ConversionsService::processEntries()`/`import()`/`importArray()`, с той
+же семантикой find-or-update-by-sub_id + синк click-тоталов, что
+`traffic-core/src/Postback/PostbackProcessor.php` использует для живых
+постбеков (backend/ и traffic-core/ — раздельные Composer-проекты, общий
+код невозможен, поэтому логика продублирована нативно на Eloquent, не
+вызовом в другой проект). Осознанно НЕ портирована конвертация валют
+(`CurrencyService::exchange()` бьёт во внешний exchange-rate API,
+инфраструктуры для этого нет нигде в проекте — тот же прецедент, что
+`TrafficCore\Postback\Postback` уже задокументировал для живых
+постбеков); `currency`-параметр остаётся обязательным (406-валидация),
+но не влияет на сохранённый revenue. Тесты: `tests/Feature/
+ConversionsTest.php` (4 новых: успешный импорт с дефолтным статусом
+sale/синком click-тоталов, распознанные/нераспознанные статус-варианты,
+sub_id не найден — с префиксом в error, "мусорная" строка без запятой
+молча дропается и не считается в total — литерально по легаси). Живая
+проверка на реальном MySQL (Docker `tds2-mysql`, не только SQLite) через
+`php artisan tinker` — фикстуры удалены. Полный `./vendor/bin/pest` —
+361/361, `php -l` чисто.
+
+**`updateCostDefinitionAction` — остаётся 501, не в этом раунде.**
+Зависит от `Component\Clicks\Grid\ClicksDefinition` (178 строк,
+конкретные колонки cost-модели/source/referrer/keyword и т.д.) —
+полноценная grid-entity для Clicks-модуля, которой в этом Laravel-порте
+всё ещё нет (только `App\Models\Click` + ad-hoc
+`GridBuilder`/`EntityGridBuilder` whitelist'ы). Не "доделать стаб", а
+отдельная задача — построить Clicks-grid-definition с нуля. Не начинать
+без отдельного запроса.
+
+`log`/`logDefinition`/`statuses`/`import` в этом же контроллере уже
+реальны и работают.
 
 ---
 

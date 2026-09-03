@@ -193,13 +193,80 @@ it('returns 406 from conversions.import when data or currency is missing', funct
     expect($response->json('error'))->toBe('Import data or currency is empty');
 });
 
-it('returns 501 (not implemented) from conversions.import when data and currency are present', function () {
+it('conversions.import: matches by sub_id, defaults to sale status with no status column, syncs click totals', function () {
+    $click = \App\Models\Click::create([
+        'visitor_id' => 6001, 'sub_id' => 'import-sub-1', 'datetime' => now(),
+        'campaign_id' => 1, 'source_id' => 1, 'referrer_id' => 1,
+        'cost' => 0, 'lead_revenue' => 0, 'sale_revenue' => 0, 'rejected_revenue' => 0,
+        'is_lead' => false, 'is_sale' => false, 'is_rejected' => false,
+    ]);
+
     $response = $this->postJson(conversionsEndpoint('import'), [
-        'data' => 'sub_id,status\nabc,sale',
+        'data' => 'import-sub-1,12.50',
         'currency' => 'USD',
     ]);
 
-    $response->assertStatus(501);
+    $response->assertStatus(200);
+    expect($response->json())->toBe(['errors' => [], 'success' => 1, 'total' => 1]);
+
+    $conversion = \App\Models\Conversion::where('sub_id', 'import-sub-1')->first();
+    expect($conversion)->not->toBeNull();
+    expect((float) $conversion->revenue)->toBe(12.5);
+    expect($conversion->status)->toBe('sale');
+    expect($conversion->original_status)->toBeNull();
+
+    $click->refresh();
+    expect($click->is_sale)->toBeTrue();
+    expect((float) $click->sale_revenue)->toBe(12.5);
+});
+
+it('conversions.import: recognized status variation maps correctly, unrecognized falls back to lead', function () {
+    \App\Models\Click::create([
+        'visitor_id' => 6002, 'sub_id' => 'import-sub-2', 'datetime' => now(),
+        'campaign_id' => 1, 'source_id' => 1, 'referrer_id' => 1,
+        'cost' => 0, 'lead_revenue' => 0, 'sale_revenue' => 0, 'rejected_revenue' => 0,
+        'is_lead' => false, 'is_sale' => false, 'is_rejected' => false,
+    ]);
+    \App\Models\Click::create([
+        'visitor_id' => 6003, 'sub_id' => 'import-sub-3', 'datetime' => now(),
+        'campaign_id' => 1, 'source_id' => 1, 'referrer_id' => 1,
+        'cost' => 0, 'lead_revenue' => 0, 'sale_revenue' => 0, 'rejected_revenue' => 0,
+        'is_lead' => false, 'is_sale' => false, 'is_rejected' => false,
+    ]);
+
+    $response = $this->postJson(conversionsEndpoint('import'), [
+        'data' => "import-sub-2,5,,confirmed\nimport-sub-3,5,,gibberish_status",
+        'currency' => 'USD',
+    ]);
+
+    $response->assertStatus(200);
+    expect($response->json())->toBe(['errors' => [], 'success' => 2, 'total' => 2]);
+
+    expect(\App\Models\Conversion::where('sub_id', 'import-sub-2')->first()->status)->toBe('sale');
+    expect(\App\Models\Conversion::where('sub_id', 'import-sub-3')->first()->status)->toBe('lead');
+});
+
+it('conversions.import: unknown sub_id is reported as an error, prefixed with the sub_id', function () {
+    $response = $this->postJson(conversionsEndpoint('import'), [
+        'data' => 'no-such-sub-id,10',
+        'currency' => 'USD',
+    ]);
+
+    $response->assertStatus(200);
+    $body = $response->json();
+    expect($body['success'])->toBe(0);
+    expect($body['total'])->toBe(1);
+    expect($body['errors'])->toBe(['no-such-sub-id: SubID not found "no-such-sub-id"']);
+});
+
+it('conversions.import: a malformed row (no comma) is silently dropped, not counted toward total', function () {
+    $response = $this->postJson(conversionsEndpoint('import'), [
+        'data' => "no-comma-here\nalso-malformed",
+        'currency' => 'USD',
+    ]);
+
+    $response->assertStatus(200);
+    expect($response->json())->toBe(['errors' => [], 'success' => 0, 'total' => 0]);
 });
 
 it('returns 501 (not implemented) from conversions.updateCostDefinition', function () {
