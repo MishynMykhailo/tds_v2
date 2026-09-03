@@ -170,6 +170,30 @@ it('lists landings as options', function () {
     }
 });
 
+it('index resolves the real group name with withGroupName=1, null when ungrouped', function () {
+    $group = \Database\Factories\GroupFactory::new()->forLandings()->create(['name' => 'Landing Group']);
+    $grouped = LandingFactory::new()->create(['group_id' => $group->id]);
+    $ungrouped = LandingFactory::new()->create(['group_id' => 0]);
+
+    $response = $this->getJson(landingsEndpoint('index', ['withGroupName' => 1]));
+
+    $response->assertStatus(200);
+    $byId = collect($response->json())->keyBy('id');
+    expect($byId[$grouped->id]['group'])->toBe('Landing Group');
+    expect($byId[$ungrouped->id]['group'])->toBeNull();
+});
+
+it('listAsOptions resolves the real group name for landings', function () {
+    $group = \Database\Factories\GroupFactory::new()->forLandings()->create(['name' => 'Landing List Group']);
+    $landing = LandingFactory::new()->create(['group_id' => $group->id, 'state' => 'active']);
+
+    $response = $this->getJson(landingsEndpoint('listAsOptions'));
+
+    $response->assertStatus(200);
+    $byId = collect($response->json())->keyBy('id');
+    expect($byId[$landing->id]['group'])->toBe('Landing List Group');
+});
+
 it('denies a guest (no current user) access to view a landing with a 403', function () {
     $landing = LandingFactory::new()->create();
     actingAsAdminForLandings(null);

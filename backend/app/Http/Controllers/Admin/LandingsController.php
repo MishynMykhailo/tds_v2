@@ -226,9 +226,14 @@ class LandingsController extends Controller
         }
 
         // LandingSerializer::extra(): "group" key is only present with
-        // ?withGroupName=1 — TODO: Groups module not ported yet, stub null.
+        // ?withGroupName=1. Legacy `LandingRepository::allWithGroupName()`
+        // LEFT JOINs `groups` and selects `groups.name AS \`group\`` — a
+        // plain LEFT JOIN, no "empty group_id -> Default" fallback (that's
+        // `CampaignSerializer`-only, confirmed by reading both sources).
         if ($withGroupName) {
-            $data['group'] = null;
+            $data['group'] = ! empty($data['group_id'])
+                ? \App\Models\Group::find($data['group_id'])?->name
+                : null;
         }
 
         // LandingSerializer::extra(): local_file landings get a `preview`
@@ -399,16 +404,20 @@ class LandingsController extends Controller
         // group_id/group are always included. `id`/`value` both carry the
         // numeric id for API-contract compatibility with the other
         // *Controller::listAsOptionsAction ports (Campaigns/Streams/Offers).
+        // Real group name lookup (see serializeLanding()'s docblock for
+        // the same "no Default fallback" note — `Builder::build()`'s
+        // behavior, confirmed by reading it, not assumed).
+        $groupNames = \App\Models\Group::whereIn('id', collect($landings)->pluck('group_id')->filter()->unique())
+            ->pluck('name', 'id');
+
         $items = [];
         foreach ($landings as $landing) {
-            // TODO: GroupsRepository not ported yet — real group name
-            // resolution pending.
             $items[] = [
                 'id' => $landing->id,
                 'value' => $landing->id,
                 'name' => $landing->name,
                 'group_id' => $landing->group_id,
-                'group' => null,
+                'group' => ! empty($landing->group_id) ? $groupNames->get($landing->group_id) : null,
             ];
         }
 

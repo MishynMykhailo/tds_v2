@@ -233,3 +233,28 @@ it('leaves affiliate_network null with withGroupName=1 when the offer has no net
     $response->assertStatus(200);
     expect($response->json('affiliate_network'))->toBeNull();
 });
+
+it('resolves the real group name with withGroupName=1, null (not "Default") when ungrouped', function () {
+    $group = \Database\Factories\GroupFactory::new()->forOffers()->create(['name' => 'Offer Group']);
+    $grouped = OfferFactory::new()->create(['group_id' => $group->id]);
+    $ungrouped = OfferFactory::new()->create(['group_id' => 0]);
+
+    $response = $this->getJson(offersEndpoint('show', ['id' => $grouped->id, 'withGroupName' => 1]));
+    $response->assertStatus(200);
+    expect($response->json('group'))->toBe('Offer Group');
+
+    $response = $this->getJson(offersEndpoint('show', ['id' => $ungrouped->id, 'withGroupName' => 1]));
+    $response->assertStatus(200);
+    expect($response->json('group'))->toBeNull();
+});
+
+it('listAsOptions resolves the real group name for offers', function () {
+    $group = \Database\Factories\GroupFactory::new()->forOffers()->create(['name' => 'Offer List Group']);
+    $offer = OfferFactory::new()->create(['group_id' => $group->id, 'state' => 'active']);
+
+    $response = $this->getJson(offersEndpoint('listAsOptions'));
+
+    $response->assertStatus(200);
+    $byId = collect($response->json())->keyBy('id');
+    expect($byId[$offer->id]['group'])->toBe('Offer List Group');
+});

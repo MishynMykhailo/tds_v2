@@ -192,9 +192,7 @@ class CampaignsController extends Controller
                 $data['group'] = 'Default';
                 $data['group_id'] = 0;
             } else {
-                // TODO: Groups module not ported yet — real group name
-                // resolution (GroupsRepository::getName()) is pending.
-                $data['group'] = 'Default';
+                $data['group'] = \App\Models\Group::find($data['group_id'])?->name;
             }
 
             // TODO: Streams module not ported yet — real count from
@@ -453,24 +451,67 @@ class CampaignsController extends Controller
         $campaigns = $query->orderBy('position')->orderBy('id')->get();
         $campaigns = $this->aclService->filterByAcl($campaigns, false, $this->currentUserService->get());
 
+        $groupNames = $this->groupNamesFor(collect($campaigns)->pluck('group_id'));
+
         $items = [];
         if ($addBlank) {
             $items[] = ['id' => '', 'name' => 'Choose campaign'];
         }
 
         foreach ($campaigns as $campaign) {
-            // TODO: Groups module not ported yet — real group name via
-            // GroupsRepository::getName(); hardcoded "Default" for now.
+            [$groupId, $group] = $this->resolveGroup($campaign->group_id, $groupNames);
             $items[] = [
                 'id' => $campaign->id,
                 'name' => $campaign->name,
-                'group_id' => $campaign->group_id,
-                'group' => 'Default',
+                'group_id' => $groupId,
+                'group' => $group,
                 'value' => (int) ($key === 'id' ? $campaign->id : $campaign->{$key}),
             ];
         }
 
         return $items;
+    }
+
+    /**
+     * Legacy `CampaignSerializer`: `empty(group_id)` -> `group_id = 0` +
+     * translated "groups.default" (this project has no i18n yet — same
+     * precedent as `ResourceController`/`GeoProfiles` — hardcoded
+     * "Default" here, matching the string this stub already returned).
+     * A real group_id whose row no longer exists (deleted group) legally
+     * resolves to `null` (`EntityRepository::getName()`'s own behavior
+     * for a miss) — not fabricated as "Default" or omitted.
+     *
+     * @param  \Illuminate\Support\Collection<int, string>  $groupNames  group_id => name
+     * @return array{0: int, 1: ?string}
+     */
+    private function resolveGroup(?int $groupId, \Illuminate\Support\Collection $groupNames): array
+    {
+        if (empty($groupId)) {
+            return [0, 'Default'];
+        }
+
+        return [$groupId, $groupNames->get($groupId)];
+    }
+
+    /**
+     * Batch-loads group names for a list of group_ids in one query
+     * (`Group::whereIn(...)->pluck()`) instead of one lookup per row —
+     * `EntityRepository::getName()`'s per-call memoization in legacy
+     * achieves the same "don't re-query the same id twice" effect via a
+     * different mechanism (a request-lifetime cache), same end result.
+     *
+     * @param  \Illuminate\Support\Collection<int, int|null>  $groupIds
+     * @return \Illuminate\Support\Collection<int, string>  group_id => name
+     */
+    private function groupNamesFor(\Illuminate\Support\Collection $groupIds): \Illuminate\Support\Collection
+    {
+        $ids = $groupIds->filter(fn ($id) => ! empty($id))->unique()->values();
+
+        if ($ids->isEmpty()) {
+            return collect();
+        }
+
+        return \App\Models\Group::whereIn('id', $ids)->pluck('name', 'id');
     }
 
     // ---------------------------------------------------------------

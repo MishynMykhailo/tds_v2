@@ -4,6 +4,7 @@ use App\Models\Campaign;
 use App\Models\User;
 use App\Services\AuthService;
 use Database\Factories\CampaignFactory;
+use Database\Factories\GroupFactory;
 use Database\Factories\UserFactory;
 
 /*
@@ -198,6 +199,32 @@ it('lists campaigns as options in the {id,name,group_id,group,value} shape', fun
     foreach ($data as $item) {
         expect($item)->toHaveKeys(['id', 'name', 'group_id', 'group', 'value']);
     }
+});
+
+it('listAsOptions resolves the real group name, and defaults ungrouped campaigns to "Default"/group_id 0', function () {
+    $group = GroupFactory::new()->create(['name' => 'My Real Group']);
+    $grouped = CampaignFactory::new()->create(['group_id' => $group->id]);
+    $ungrouped = CampaignFactory::new()->create(['group_id' => 0]);
+
+    $response = $this->getJson(campaignsEndpoint('listAsOptions'));
+
+    $response->assertStatus(200);
+    $byId = collect($response->json())->keyBy('id');
+
+    expect($byId[$grouped->id]['group'])->toBe('My Real Group');
+    expect($byId[$grouped->id]['group_id'])->toBe($group->id);
+    expect($byId[$ungrouped->id]['group'])->toBe('Default');
+    expect($byId[$ungrouped->id]['group_id'])->toBe(0);
+});
+
+it('show (extended) resolves the real group name for a grouped campaign', function () {
+    $group = GroupFactory::new()->create(['name' => 'Extended Group']);
+    $campaign = CampaignFactory::new()->create(['group_id' => $group->id]);
+
+    $response = $this->getJson(campaignsEndpoint('show', ['id' => $campaign->id]));
+
+    $response->assertStatus(200);
+    expect($response->json('group'))->toBe('Extended Group');
 });
 
 it('denies a guest (no current user) access to view a campaign with a 403', function () {

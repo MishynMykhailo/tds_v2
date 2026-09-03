@@ -47,18 +47,31 @@ $this->currentUserService->get()` в `EntityGridBuilder`, а тот
 реализацию + тест), кода не менялось. Полный `./vendor/bin/pest`
 (350/350) и `php -l` на все 5 контроллеров — чисто.
 
-### 1.2 Groups — реальные имена вместо null-стаба
-`GroupsController.php` + `Group`-модель уже существуют и подключены в
-`AclService` (entity_type = group). Но в нескольких местах остался
-старый null-стаб с комментарием "Groups module not ported yet" —
-комментарий устарел, сам модуль уже есть:
-- `CampaignsController.php` (withGroupName)
-- `OffersController.php` (withGroupName)
-- `LandingsController.php` (withGroupName)
+### 1.2 Groups — реальные имена вместо null-стаба — ЗАКРЫТО (2026-09-03)
 
-Задача: заменить null-стаб реальным JOIN/lookup на `groups` через
-`Group`-модель (или существующий `GroupsController`'s репозиторный
-метод, если такой уже есть — проверить).
+Заменены все null/хардкод-стабы на реальный lookup через `Group`-модель
+(нет отдельного репозиторного метода в `GroupsController`, простой
+`Group::find()`/batch `whereIn()->pluck('name','id')` для списков —
+избегает N+1 на `listAsOptionsAction`):
+- `CampaignsController.php` — `serializeCampaign()` (extended) +
+  `listAsOptionsAction()`. Легаси `CampaignSerializer` — единственный из
+  трёх с "empty(group_id) -> group_id=0 + group='Default'" фоллбэком
+  (переведённая строка "groups.default" в легаси, хардкод "Default"
+  здесь — тот же прецедент, что везде без i18n).
+- `OffersController.php` — `serializeOffer()`'s `withGroupName` ветка +
+  `listAsOptionsAction()`. Легаси `OfferRepository`/`Builder::build()` —
+  **другой контракт**: простой LEFT JOIN, `group_id=0`/удалённая группа
+  -> `group=null`, БЕЗ "Default"-фоллбэка (проверено чтением обоих
+  реальных источников, не предположено "как у Campaigns").
+- `LandingsController.php` — `serializeLanding()`'s `withGroupName`
+  ветка + `listAsOptionsAction()`. Тот же контракт, что у Offers (простой
+  LEFT JOIN, null без фоллбэка).
+
+Тесты: по 2-3 новых в `CampaignsTest.php`/`OffersTest.php`/
+`LandingsTest.php` (реальное имя группы, ungrouped -> `Default`/`null`
+по контракту каждого контроллера). Живая проверка на реальном MySQL
+(`tds2-mysql`) через `php artisan tinker` — фикстуры удалены. Полный
+`./vendor/bin/pest` — 373/373, `php -l` чисто.
 
 ### 1.3 ReportsController не использует уже готовые в traffic-core словари — ЗАКРЫТО (2026-09-03)
 `backend/app/Http/Controllers/Admin/ReportsController.php` исключал

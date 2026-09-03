@@ -237,13 +237,17 @@ class OffersController extends Controller
 
         // OfferSerializer::extra(): "group"/"affiliate_network" keys are
         // only present with ?withGroupName=1. Legacy `OfferRepository::
-        // allWithGroupNames()` LEFT JOINs affiliate_networks (and groups)
-        // and selects `networks.name AS affiliate_network` — replicated
-        // here via a plain lookup (AffiliateNetworks module is now ported;
-        // Groups is still a TODO stub).
+        // allWithGroupNames()` LEFT JOINs affiliate_networks AND groups
+        // and selects `networks.name AS affiliate_network, groups.name AS
+        // \`group\`` — a plain LEFT JOIN with no "empty group_id -> Default"
+        // fallback (unlike `CampaignSerializer`, which does have that
+        // fallback — confirmed by reading both real sources, not assumed
+        // to be the same convention). A `group_id` of 0 or a deleted
+        // group's id both legally resolve to `null` here.
         if ($withGroupName) {
-            // TODO: GroupsRepository not ported yet.
-            $data['group'] = null;
+            $data['group'] = ! empty($data['group_id'])
+                ? \App\Models\Group::find($data['group_id'])?->name
+                : null;
             $data['affiliate_network'] = ! empty($data['affiliate_network_id'])
                 ? AffiliateNetwork::find($data['affiliate_network_id'])?->name
                 : null;
@@ -426,16 +430,21 @@ class OffersController extends Controller
         // group_id/group are always included. `id`/`value` both carry the
         // numeric id for API-contract compatibility with the other
         // *Controller::listAsOptionsAction ports (Campaigns/Streams).
+        // Real group name: legacy's `Builder::build()` looks it up from
+        // `GroupsRepository::allAsHash()`, `null` when `group_id` is
+        // empty (no "Default" fallback here — that's a `CampaignSerializer`-
+        // only convention, confirmed by reading `Builder::build()` itself).
+        $groupNames = \App\Models\Group::whereIn('id', collect($offers)->pluck('group_id')->filter()->unique())
+            ->pluck('name', 'id');
+
         $items = [];
         foreach ($offers as $offer) {
-            // TODO: GroupsRepository not ported yet — real group name
-            // resolution pending.
             $items[] = [
                 'id' => $offer->id,
                 'value' => $offer->id,
                 'name' => $offer->name,
                 'group_id' => $offer->group_id,
-                'group' => null,
+                'group' => ! empty($offer->group_id) ? $groupNames->get($offer->group_id) : null,
             ];
         }
 

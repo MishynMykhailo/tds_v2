@@ -1600,4 +1600,24 @@ trigger физически невозможен. Подтверждено жив
 `sync`).
 
 ---
+
+## Groups — реальные имена (backlog 1.2) — 2026-09-03
+
+Заменены null/хардкод-стабы в Campaigns/Offers/Landings контроллерах на
+реальный `Group`-модель lookup. **Найдено при чтении реальных источников
+(не предположено)**: Campaigns и Offers/Landings следуют РАЗНЫМ
+контрактам — `CampaignSerializer` фоллбэкает пустой `group_id` на
+`group_id=0`+`group='Default'`, а `OfferRepository`/`LandingRepository`/
+`Core\Entity\ListOptions\Builder::build()` — простой LEFT JOIN без
+фоллбэка (`group=null`). Портировано отдельно под каждый контракт, не
+унифицировано ошибочно.
+
+Список lookup не имел готового репозиторного метода в
+`GroupsController` — простой `Group::find()` (одиночный serialize) /
+`whereIn(...)->pluck('name','id')` (списки, избегает N+1). Тесты (по
+2-3 на контроллер) + живая проверка на реальном MySQL через `php
+artisan tinker`, фикстуры удалены. Полный `./vendor/bin/pest` —
+373/373, `php -l` чисто.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
