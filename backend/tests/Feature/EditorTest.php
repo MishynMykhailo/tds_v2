@@ -244,6 +244,20 @@ describe('editor.infoLanding', function () {
         expect($data['name'])->toBe('external one');
     });
 
+    // REAL BUG, found live against legacy port 8090 (2026-09-03):
+    // `preview` was missing entirely for a local_file landing, even
+    // though LandingsController::showAction() already appends it and
+    // this action's own docblock claims the same base field set.
+    it('includes preview for a local_file landing, matching landings.show', function () {
+        $landing = LandingFactory::new()->local()->create();
+        $folder = json_decode($landing->action_options, true)['folder'];
+
+        $response = $this->getJson(editorEndpoint('infoLanding', ['id' => $landing->id, 'type' => 'landing']));
+
+        $response->assertStatus(200);
+        expect($response->json('preview'))->toBe($folder.'/_preview.png');
+    });
+
     it('returns 404 for a non-existent id', function () {
         $response = $this->getJson(editorEndpoint('infoLanding', ['id' => 999999, 'type' => 'landing']));
 

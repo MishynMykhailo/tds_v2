@@ -36,13 +36,22 @@ use Symfony\Component\HttpFoundation\Response;
  *   escapes — legacy concatenates the path with zero traversal checks.
  * - A missing/invalid `id`/`type` returns a real 404 instead of legacy's
  *   `findModel()` returning `false` and then calling ACL checks on `false`.
- * - `infoLandingAction` is NOT ported — trivial re-serialization of an
- *   already-existing landing/offer, not core Editor behavior, skipped to
- *   keep this round scoped to the actual file-manager surface.
  * - `CreatePreviewImageCommand::enqueue(...)` after save/remove IS now
  *   called (`App\Jobs\GenerateLocalFilePreviewJob`) — see that job's
  *   docblock for how rendering works now that `PreviewImageService` is
  *   real (`App\Services\PreviewImageService`, headless-Chrome based).
+ * - `loadFilesAction` on a folder that doesn't exist on disk yet (a
+ *   freshly-created local landing/offer, before its first `createFile`)
+ *   returns an empty `children` list instead of crashing — verified live
+ *   (2026-09-03) that real legacy 500s here with an uncaught
+ *   `DirectoryNotFoundException`, not a deliberate legacy behavior worth
+ *   reproducing.
+ * - `saveFileData`/`removeFile` also 500 in the live legacy dev
+ *   environment specifically — traced to `CreatePreviewImageCommand::
+ *   enqueue()`'s own Redis connection failing there, unrelated to file
+ *   I/O. This port's equivalent (`GenerateLocalFilePreviewJob`) already
+ *   catches that failure internally (see its own docblock), so it never
+ *   surfaces as a 500 here either way.
  */
 class EditorController extends Controller
 {
@@ -347,6 +356,22 @@ class EditorController extends Controller
 
         if (array_key_exists('action_options', $data)) {
             $data['action_options'] = $this->decodeActionOptions($data['action_options']);
+        }
+
+        // REAL BUG, found live against legacy port 8090 (2026-09-03): a
+        // local_file landing/offer's `preview` field (the relative path
+        // to `_preview.png`, present whether or not a real screenshot has
+        // been generated yet) was missing entirely - `getAttributes()`
+        // only returns real DB columns, and `preview` isn't one. Both
+        // `LandingsController::showAction()`/`OffersController::
+        // showAction()` already append it the same way (see either
+        // docblock for the full "always set once a folder exists"
+        // reasoning) - this action's own docblock claims the "same base
+        // field set" but that claim was never actually verified for this
+        // one field until now.
+        $folder = is_array($data['action_options'] ?? null) ? ($data['action_options']['folder'] ?? null) : null;
+        if (($data['action_type'] ?? null) === 'local_file' && ! empty($folder)) {
+            $data['preview'] = rtrim($folder, '/').'/'.\App\Services\PreviewImageService::PREVIEW_FILE;
         }
 
         return response()->json($data);
