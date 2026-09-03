@@ -269,8 +269,20 @@ it('conversions.import: a malformed row (no comma) is silently dropped, not coun
     expect($response->json())->toBe(['errors' => [], 'success' => 0, 'total' => 0]);
 });
 
-it('returns 501 (not implemented) from conversions.updateCostDefinition', function () {
+it('returns a real ClicksDefinition-shaped grid definition from conversions.updateCostDefinition', function () {
     $response = $this->getJson(conversionsEndpoint('updateCostDefinition'));
 
-    $response->assertStatus(501);
+    $response->assertStatus(200);
+    $data = $response->json();
+
+    expect($data)->toHaveKeys(['url', 'details', 'range_intervals', 'columns']);
+    expect($data['url'])->toBeNull();
+    expect($data['details'])->toBeNull();
+    expect($data['range_intervals'])->toBe([]);
+
+    $names = collect($data['columns'])->pluck('name');
+    expect($names)->toContain('click_id', 'campaign_id', 'stream_id', 'revenue', 'cost', 'profit', 'sub_id_1', 'sub_id_15', 'extra_param_1');
+
+    $revenue = collect($data['columns'])->firstWhere('name', 'revenue');
+    expect($revenue['metric'])->toBeTrue();
 });

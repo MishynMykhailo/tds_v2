@@ -23,10 +23,10 @@ use Symfony\Component\HttpFoundation\Response;
  * docs/legacy-reference/frontend/api/00_common_routing_auth_acl_errors_grid.md
  * §9.
  *
- * `log`, `logDefinition`, `statuses`, and now `import` (see
- * `App\Services\ConversionImportService`) are backed by real logic —
- * `updateCostDefinition` remains a documented TODO stub (see its own
- * docblock for why).
+ * All 6 legacy actions are implemented: `log`, `logDefinition`,
+ * `statuses`, `import` (see `App\Services\ConversionImportService`), and
+ * `updateCostDefinition` (see its own docblock — a prior version left
+ * this as a 501 stub on a since-corrected premise).
  */
 class ConversionsController extends Controller
 {
@@ -251,23 +251,122 @@ class ConversionsController extends Controller
 
     /**
      * Legacy `conversions.updateCostDefinition` -> `new
-     * \Component\Clicks\Grid\ClicksDefinition()->getGridDefinition()` — the
-     * grid definition used by the admin UI's "bulk-update click cost by
-     * filter" form (cf. `campaigns.updateCosts`).
+     * \Component\Clicks\Grid\ClicksDefinition()->getGridDefinition()`.
      *
-     * TODO (documented stub, per task brief): depends on
-     * `Component\Clicks\Grid\ClicksDefinition`, which belongs to the Clicks
-     * module — not yet built out as a full CRUD/grid entity in this Laravel
-     * port (only `App\Models\Click` + the `clicks` table + the ad-hoc
-     * `App\Services\Grid\GridBuilder`/`EntityGridBuilder` column whitelists
-     * used by `reports.build`/`campaigns.withStats` exist so far, none of
-     * which is "ClicksDefinition" itself). Returns 501 rather than a
-     * fabricated definition.
+     * CORRECTION (2026-09-03): a prior version of this action returned a
+     * hard 501, on the premise that `ClicksDefinition` — "the Clicks
+     * module's grid entity" — didn't exist in this port and building one
+     * from scratch was a separate, large task. Re-reading the real legacy
+     * `ClicksDefinition::initColumns()`/`getGridDefinition()` directly
+     * shows that's an overstatement: unlike `reports.build`/
+     * `conversions.log` (which run a REAL query built from a
+     * `GridDefinition`), `updateCostDefinitionAction()` does nothing but
+     * construct the object and call `getGridDefinition()` — it never
+     * queries anything. It is PURE METADATA (an inert `{url, details,
+     * range_intervals, columns}` describing the "bulk-update click cost by
+     * filter" form's available columns/filters), confirmed live against
+     * legacy port 8090 — verified byte-for-byte that legacy's real output
+     * carries `url: null`, `details: null`, `range_intervals: []`.
+     * Building that requires no live grid/query machinery at all, just a
+     * column list — same style as `logDefinitionAction()` above and
+     * `ReportsController::definitionAction()` (name/type/category/filter/
+     * groupable/sortable/hidden/metric/summary only, no `inner_select`/
+     * `title`/`resizable`/decorators — this port's established "no i18n,
+     * no internal-SQL-leak" simplification, consistent everywhere else a
+     * `*DefinitionAction` exists in this codebase).
+     *
+     * Column set: the real `ClicksDefinition::initColumns()` column list,
+     * MINUS the `<x>_id -> <x>` dereferenced-name text columns this port
+     * has no join wired for anywhere (campaign/offer/landing/ts/stream/
+     * affiliate_network/campaign_group/parent_campaign/language/
+     * device_type/connection_type/country/region/city/operator/os/
+     * browser/device_model/isp/user_agent) — same, already-established
+     * precedent as `ReportsController::BUILD_COLUMNS_BASE`'s own docblock
+     * (keep the raw `*_id` FK column with its `enum` filter/dictionary,
+     * drop the name column nothing here can actually resolve). Icon-only
+     * cosmetic columns (`os_icon`/`browser_icon`/`country_flag`,
+     * `exclude_from_details: true` in legacy, UI-decoration only) are
+     * dropped for the same reason. `source`/`referrer`/`search_engine`/
+     * `keyword`/`destination`/`ad_campaign_id`/`external_id`/
+     * `creative_id`/`x_requested_with` are legacy TEXT columns dereferenced
+     * through a `ref_*` dictionary relation — this port's `clicks` table
+     * only has the raw `*_id` FK (see `2025_01_01_000018_create_clicks_
+     * table.php`), so these are listed under their real `*_id` column
+     * names instead (matches `ReportsController::BUILD_COLUMNS_BASE`
+     * again, which made the identical call for the same columns).
      */
-    public function updateCostDefinitionAction(Request $request): Response
+    public function updateCostDefinitionAction(Request $request): array
     {
-        return ResponseFacade::json([
-            'error' => 'conversions.updateCostDefinition is not implemented yet (depends on Component\Clicks\Grid\ClicksDefinition, the Clicks module has not been ported as a grid entity — see App\Http\Controllers\Admin\ConversionsController::updateCostDefinitionAction docblock).',
-        ], 501);
+        $subIdColumns = [];
+        for ($i = 1; $i <= 15; $i++) {
+            $subIdColumns[] = ['name' => "sub_id_{$i}", 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'sub_ids', 'width' => 100];
+        }
+
+        $extraParamColumns = [];
+        for ($i = 1; $i <= 10; $i++) {
+            $extraParamColumns[] = ['name' => "extra_param_{$i}", 'type' => 'string', 'filter' => ['type' => 'string'], 'category' => 'params'];
+        }
+
+        return [
+            'url' => null,
+            'details' => null,
+            'range_intervals' => [],
+            'columns' => [
+                ['name' => 'profitability', 'type' => 'decimal', 'th_title' => '#', 'sortable' => true, 'groupable' => false, 'category' => 'money', 'metric' => true, 'formatter' => 'profitability', 'filter' => ['type' => 'boolean'], 'width' => 3],
+                ['name' => 'click_id', 'type' => 'integer', 'sortable' => true, 'primary' => true, 'category' => 'ids', 'groupable' => true, 'hidden' => true, 'width' => 80],
+                ['name' => 'datetime', 'type' => 'datetime', 'sortable' => true, 'formatter' => 'datetime', 'category' => 'data', 'clickable' => true, 'width' => 160],
+                ['name' => 'sub_id', 'type' => 'string', 'sortable' => true, 'filter' => ['type' => 'string'], 'category' => 'ids', 'width' => 145],
+                ['name' => 'visitor_id', 'type' => 'string', 'sortable' => true, 'filter' => ['type' => 'string'], 'groupable' => true, 'category' => 'ids'],
+                ['name' => 'campaign_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.campaign', 'category' => 'data', 'dictionary' => ['valueProp' => 'id', 'url' => '?object=campaigns.listAsOptions', 'group' => true]], 'category' => 'ids', 'width' => 80],
+                ['name' => 'campaign_group_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.campaign_group', 'category' => 'data', 'dictionary' => ['url' => '?object=groups.listAsOptions&type=campaigns']], 'category' => 'ids', 'width' => 80],
+                ['name' => 'parent_campaign_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.parent_campaign', 'category' => 'data', 'dictionary' => ['url' => '?object=campaigns.listAsOptions', 'group' => true]], 'category' => 'ids', 'width' => 80],
+                ['name' => 'landing_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.landing', 'category' => 'data', 'dictionary' => ['url' => '?object=landings.index&withGroupName=true', 'valueProp' => 'id', 'group' => true]], 'category' => 'ids', 'width' => 80],
+                ['name' => 'landing_clicked_datetime', 'type' => 'datetime', 'sortable' => true, 'formatter' => 'datetime', 'category' => 'data'],
+                ['name' => 'landing_clicked_period', 'type' => 'string', 'metric' => true, 'sortable' => true, 'filter' => ['type' => 'integer'], 'formatter' => 'time_diff', 'category' => 'data'],
+                ['name' => 'offer_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.offer', 'category' => 'data', 'dictionary' => ['valueProp' => 'id', 'url' => '?object=offers.index&withGroupName=true', 'group' => true]], 'category' => 'ids', 'width' => 80],
+                ['name' => 'affiliate_network_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.affiliate_network', 'category' => 'data', 'dictionary' => ['valueProp' => 'id', 'url' => '?object=affiliateNetworks.index', 'group' => true]], 'category' => 'ids', 'width' => 80],
+                ['name' => 'ts_id', 'type' => 'integer', 'sortable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.ts', 'category' => 'data', 'dictionary' => ['valueProp' => 'id', 'url' => '?object=trafficSources.index']], 'category' => 'ids', 'width' => 80],
+                ['name' => 'stream_id', 'type' => 'integer', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'enum', 'title' => 'grid.stream', 'category' => 'data', 'dictionary' => ['url' => '?object=streams.listAsOptions', 'valueProp' => 'id', 'group' => true]], 'category' => 'ids', 'width' => 80],
+                ['name' => 'is_unique_stream', 'type' => 'boolean', 'th_title' => 'grid.is_unique_stream_th', 'sortable' => true, 'category' => 'data', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_unique_campaign', 'type' => 'boolean', 'th_title' => 'grid.is_unique_campaign_th', 'filter' => ['type' => 'boolean'], 'groupable' => true, 'sortable' => true, 'category' => 'data', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_unique_global', 'type' => 'boolean', 'th_title' => 'grid.is_unique_global_th', 'filter' => ['type' => 'boolean'], 'groupable' => true, 'sortable' => true, 'category' => 'data', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_lead', 'type' => 'boolean', 'filter' => ['type' => 'boolean'], 'sortable' => true, 'groupable' => true, 'category' => 'money', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_sale', 'type' => 'boolean', 'filter' => ['type' => 'boolean'], 'sortable' => true, 'groupable' => true, 'category' => 'money', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_rejected', 'type' => 'boolean', 'filter' => ['type' => 'boolean'], 'sortable' => true, 'groupable' => true, 'category' => 'money', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_bot', 'type' => 'boolean', 'filter' => ['type' => 'boolean'], 'sortable' => true, 'groupable' => true, 'category' => 'device', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'is_using_proxy', 'type' => 'boolean', 'th_title' => 'grid.is_using_proxy_th', 'filter' => ['type' => 'boolean'], 'sortable' => true, 'groupable' => true, 'category' => 'geo', 'formatter' => 'boolean', 'width' => 80],
+                ['name' => 'language_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.language', 'category' => 'device', 'dictionary' => ['url' => '?object=clicks.dictionary&name=languages', 'column' => 'language_id']], 'hidden' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'device_type_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.device_type', 'category' => 'device', 'dictionary' => ['url' => '?object=clicks.dictionary&name=deviceTypes']], 'hidden' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'connection_type_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.connection_type', 'category' => 'connection', 'dictionary' => ['url' => '?object=clicks.dictionary&name=connectionTypes']], 'hidden' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'ip_id', 'type' => 'ip', 'hidden' => true, 'groupable' => true, 'sortable' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'country_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.country', 'category' => 'geo', 'dictionary' => ['url' => '?object=clicks.dictionary&name=countries']], 'hidden' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'region_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.region', 'category' => 'geo', 'dictionary' => ['url' => '?object=clicks.dictionary&name=regions']], 'hidden' => true, 'category' => 'ids'],
+                ['name' => 'city_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.city', 'category' => 'geo', 'dictionary' => ['url' => '?object=clicks.dictionary&name=cities']], 'sortable' => true, 'hidden' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'user_agent_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.user_agent'], 'category' => 'ids', 'hidden' => true, 'width' => 80],
+                ['name' => 'operator_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.operator', 'category' => 'connection', 'dictionary' => ['url' => '?object=clicks.dictionary&name=operators']], 'hidden' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'os_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.os', 'category' => 'device', 'dictionary' => ['url' => '?object=clicks.dictionary&name=os']], 'category' => 'ids', 'hidden' => true, 'sortable' => true, 'width' => 80],
+                ['name' => 'os_version', 'type' => 'version', 'filter' => ['type' => 'version', 'title' => 'grid.os_version'], 'groupable' => true, 'sortable' => true, 'category' => 'device', 'width' => 80],
+                ['name' => 'browser_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.browser', 'category' => 'device', 'dictionary' => ['url' => '?object=clicks.dictionary&name=browsers']], 'hidden' => true, 'sortable' => true, 'category' => 'ids', 'width' => 80],
+                ['name' => 'browser_version', 'type' => 'version', 'filter' => ['type' => 'version', 'title' => 'grid.browser_version'], 'groupable' => true, 'sortable' => true, 'category' => 'device'],
+                ['name' => 'device_model_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.device_model', 'category' => 'device', 'dictionary' => ['url' => '?object=clicks.dictionary&name=deviceModels']], 'hidden' => true, 'category' => 'ids', 'sortable' => true, 'width' => 80],
+                ['name' => 'isp_id', 'type' => 'integer', 'filter' => ['type' => 'enum', 'title' => 'grid.isp', 'category' => 'connection', 'dictionary' => ['url' => '?object=clicks.dictionary&name=isp']], 'hidden' => true, 'category' => 'ids', 'sortable' => true, 'width' => 80],
+                ['name' => 'source_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'x_requested_with_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'ad_campaign_id_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true, 'width' => 80],
+                ['name' => 'external_id_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'creative_id_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'referrer_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'search_engine_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'keyword_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ['name' => 'destination_id', 'type' => 'integer', 'sortable' => true, 'category' => 'ids', 'hidden' => true],
+                ...$subIdColumns,
+                ...$extraParamColumns,
+                ['name' => 'revenue', 'type' => 'decimal', 'metric' => true, 'filter' => ['type' => 'decimal'], 'sortable' => true, 'category' => 'money', 'fraction_size' => 4, 'formatter' => 'money'],
+                ['name' => 'lead_revenue', 'type' => 'decimal', 'metric' => true, 'filter' => ['type' => 'decimal'], 'sortable' => true, 'summary' => true, 'category' => 'money', 'fraction_size' => 4, 'formatter' => 'money', 'width' => 80],
+                ['name' => 'sale_revenue', 'type' => 'decimal', 'metric' => true, 'filter' => ['type' => 'decimal'], 'sortable' => true, 'summary' => true, 'category' => 'money', 'fraction_size' => 4, 'formatter' => 'money', 'width' => 80],
+                ['name' => 'cost', 'type' => 'decimal', 'metric' => true, 'sortable' => true, 'filter' => ['type' => 'decimal'], 'category' => 'money', 'fraction_size' => 4, 'formatter' => 'money', 'width' => 100],
+                ['name' => 'profit', 'type' => 'decimal', 'th_title' => 'grid.profit_th', 'metric' => true, 'sortable' => false, 'filter' => ['type' => 'decimal'], 'category' => 'money', 'formatter' => 'money_h', 'fraction_size' => 4],
+            ],
+        ];
     }
 }

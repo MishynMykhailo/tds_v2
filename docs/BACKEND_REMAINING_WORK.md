@@ -233,17 +233,28 @@ sub_id не найден — с префиксом в error, "мусорная" 
 `php artisan tinker` — фикстуры удалены. Полный `./vendor/bin/pest` —
 361/361, `php -l` чисто.
 
-**`updateCostDefinitionAction` — остаётся 501, не в этом раунде.**
-Зависит от `Component\Clicks\Grid\ClicksDefinition` (178 строк,
-конкретные колонки cost-модели/source/referrer/keyword и т.д.) —
-полноценная grid-entity для Clicks-модуля, которой в этом Laravel-порте
-всё ещё нет (только `App\Models\Click` + ad-hoc
-`GridBuilder`/`EntityGridBuilder` whitelist'ы). Не "доделать стаб", а
-отдельная задача — построить Clicks-grid-definition с нуля. Не начинать
-без отдельного запроса.
+**`updateCostDefinitionAction` — ЗАКРЫТО (2026-09-03), премиса "нужна
+полноценная grid-entity" была неверна.** Перепроверено чтением реального
+легаси: `updateCostDefinitionAction()` — это `new ClicksDefinition()->
+getGridDefinition()` и НИЧЕГО больше. В отличие от `reports.build`/
+`conversions.log`, он НЕ выполняет никакого запроса — чистая метадата
+(`{url, details, range_intervals, columns}`), подтверждено байт-в-байт
+живым curl против порта 8090 (`url: null, details: null,
+range_intervals: []`). Значит никакой рабочей query-инфраструктуры для
+Clicks не требовалось — только список колонок, тем же стилем, что уже
+использует `logDefinitionAction()`/`ReportsController::definitionAction()`
+(name/type/category/filter/groupable/sortable/hidden/metric/summary, без
+`inner_select`/`title`/decораторов — уже устоявшееся упрощение везде в
+порте). Портированы 77 из 104 легаси-колонок — исключены только
+`<x>_id -> <x>` разыменованные name-колонки (campaign/offer/landing/...),
+для которых в этом порте нигде нет join'а (тот же, уже принятый
+прецедент, что `ReportsController::BUILD_COLUMNS_BASE`). Живая сверка
+имён колонок против легаси (`python3` diff по обоим JSON) подтвердила
+покрытие. Тест обновлён (был "returns 501", теперь проверяет реальную
+форму). Полный `./vendor/bin/pest` — 387/387, `php -l` чисто.
 
-`log`/`logDefinition`/`statuses`/`import` в этом же контроллере уже
-реальны и работают.
+`log`/`logDefinition`/`statuses`/`import`/`updateCostDefinition` — все 6
+легаси action'ов этого контроллера теперь реальны и работают.
 
 ---
 
