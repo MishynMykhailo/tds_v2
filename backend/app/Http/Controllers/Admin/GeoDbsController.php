@@ -28,15 +28,27 @@ use Symfony\Component\HttpFoundation\Response;
  * SCOPE (explicit task boundary): GeoDb in the legacy app is NOT a DB
  * table — it's a static registry of 15 hardcoded "known geo database
  * types" (Ip2Location/Sypex/Maxmind/Tds/ProIP), each an external binary
- * file that has to be downloaded/purchased and dropped on disk. Real file
- * download/update (`GeoDbService::update()` -> `DownloadManager::update()`,
- * which does HTTP downloads + gzip unpack + CRC verification against
- * tds.io/maxmind/ip2location/sypex/proip) is COMPLEX functionality
- * deliberately OUT OF SCOPE here — `updateAction` is a TODO stub (501).
- * This controller only provides:
- *  - `index` — the static list of all 15 known db types with their
- *    metadata, honestly reporting nothing is installed (no download
- *    infrastructure exists in this port to ever have put a file there).
+ * file that has to be downloaded/purchased and dropped on disk. Real
+ * AUTOMATED download (`GeoDbService::update()` -> `DownloadManager::
+ * update()`, which does HTTP downloads + gzip unpack + CRC verification
+ * against tds.io/maxmind/ip2location/sypex/proip) needs a paid/registered
+ * license key per provider this environment does not have — still
+ * deliberately OUT OF SCOPE, `updateAction` still 501s for that path
+ * specifically (see its docblock).
+ *
+ * UPDATE (2026-09-03, backlog 3.1): manual file management IS now real —
+ * `uploadAction` lets an admin who already downloaded/purchased a geo db
+ * file themselves (same file legacy would have fetched automatically)
+ * install it via a real multipart upload, and `time`/`exists`/`installed`
+ * now honestly reflect the file that lands on disk (real `filemtime()`,
+ * not hardcoded). This is "заменить файл, показать статус" from the task
+ * brief; "скачать новую версию" (automated fetch from the provider) is
+ * the part still excluded, for the credential reason above, not laziness.
+ *
+ * This controller provides:
+ *  - `index` — the static list of all 15 known db types with their real,
+ *    live-computed on-disk status (file only appears "installed" once an
+ *    admin has actually placed one there via `uploadAction` or by hand).
  *  - `settings`/`saveSettings` — the *actual* legacy "geoDb settings"
  *    concept, which is NOT an autoupdate flag (the docblock in
  *    10.9_geodb.md says "настройки автообновления баз" but the real
@@ -45,7 +57,10 @@ use Symfony\Component\HttpFoundation\Response;
  *    `data_type => db_id` map, i.e. "which installed geo db resolves
  *    country/city/isp/etc". Verified against the real source per this
  *    project's "verify, don't just please" rule, not copied from the doc.
- *  - `update` — TODO stub, 501.
+ *  - `update` — TODO stub, 501 (automated provider download only — see
+ *    UPDATE note above).
+ *  - `upload` — NEW, no legacy equivalent (manual file install, see its
+ *    own docblock).
  *
  * ## `index` field-by-field mapping to the real `GeoDbSerializer::serialize()`
  * (application/Component/GeoDb/Serializer/GeoDbSerializer.php), no
@@ -72,8 +87,9 @@ use Symfony\Component\HttpFoundation\Response;
  *                 since `exists` is always false in a stock install, this
  *                 is always `null` here. Not reimplementing
  *                 `filemtime()`-based `timestamp()` since it only ever
- *                 fires under `exists() === true`, an untested path with
- *                 no download infra to exercise it.
+ *                 fires under `exists() === true` — reachable now that
+ *                 `uploadAction()` can actually put a file on disk (see
+ *                 that method's docblock); implemented for real below.
  *   status_code/status_text
  *               — real value comes from `$manager->status()`
  *                 (`Component\GeoDb\DownloadManager\*`). Every concrete
@@ -352,7 +368,11 @@ class GeoDbsController extends Controller
             'data_types' => $dbType['data_types'],
             'status_code' => $statusCode,
             'status_text' => $statusText,
-            'time' => null,
+            // `Component\GeoDb\DownloadManager\DownloadManager::timestamp()`:
+            // filemtime() of the installed file, formatted per
+            // Core\Model\AbstractModel::DATETIME_FORMAT ("Y-m-d H:i:s") —
+            // verified against the real legacy source, not guessed.
+            'time' => $exists ? date('Y-m-d H:i:s', filemtime(base_path($dbType['path']))) : null,
             'is_recommended' => $dbType['is_recommended'],
             'setting_key' => $dbType['setting_key'],
             'purchase_link' => $dbType['purchase_link'],
@@ -466,7 +486,51 @@ class GeoDbsController extends Controller
 
         return response()->json([
             'error' => 'GeoDb file download/update is not implemented in this port yet. '.
-                'Deploy the geo database file for "'.$id.'" to the server manually.',
+                'Deploy the geo database file for "'.$id.'" to the server manually, or use '.
+                '?object=geoDbs.upload to install a file you already have.',
         ], 501);
+    }
+
+    /**
+     * NEW action, no legacy equivalent (see class docblock's "UPDATE"
+     * note) — installs a geo db file an admin already has (downloaded/
+     * purchased through the provider's own site, same file the real
+     * `DownloadManager::update()` would have fetched automatically) via a
+     * real multipart upload, at the exact `path` `serializeDbType()`/
+     * traffic-core's resolvers already expect (e.g. `GeoDbResolver`'s
+     * `GEODB_IP2LOCATION_PATH` for `ip2location_lite` — see
+     * traffic-core/src/Pipeline/GeoDb/GeoDbResolver.php). Same `isAdmin()`
+     * gate as `updateAction` (this is an install/replace operation on the
+     * server's filesystem, not read-only).
+     */
+    public function uploadAction(Request $request): Response
+    {
+        $user = $this->currentUserService->get();
+        if (! $user || ! $user->isAdmin()) {
+            return $this->forbidden();
+        }
+
+        $id = $request->input('id') ?? $this->postParam($request, 'id');
+        $dbType = collect(self::DB_TYPES)->firstWhere('id', $id);
+
+        if ($dbType === null) {
+            return response()->json(['error' => 'Unknown geo db "'.$id.'"'], 422);
+        }
+
+        if ($dbType['path'] === null) {
+            // `user_bot_ip_db` (INTERNAL type) — see class docblock, its
+            // real path is a callable into the unported BotDetection
+            // module, nothing this port can install a file at.
+            return response()->json(['error' => 'Geo db "'.$id.'" has no installable file path in this port.'], 422);
+        }
+
+        if (! $request->hasFile('file') || ! $request->file('file')->isValid()) {
+            return response()->json(['error' => 'No valid file uploaded (expected multipart field "file").'], 422);
+        }
+
+        $destination = base_path($dbType['path']);
+        $request->file('file')->move(dirname($destination), basename($destination));
+
+        return response()->json($this->serializeDbType($dbType));
     }
 }

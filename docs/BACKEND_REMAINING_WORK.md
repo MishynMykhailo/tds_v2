@@ -119,11 +119,31 @@ ref_countries` подтверждён на реальных данных, фик
 
 ## 3. Явные 501-стабы (уже видны в коде, конкретная задача)
 
-### 3.1 GeoDb — скачивание/обновление баз
+### 3.1 GeoDb — скачивание/обновление баз — ЧАСТИЧНО ЗАКРЫТО (2026-09-03)
 `backend/app/Http/Controllers/Admin/GeoDbsController.php::updateAction` —
-явный 501. Runtime-резолвер (IP2Location LITE) в traffic-core уже
-реален (Phase 9) — админского UI управления файлами баз данных всё ещё
-нет: скачать новую версию, заменить файл, показать статус.
+был явный 501 без условий вообще. Реализовано: новый `uploadAction`
+(`?object=geoDbs.upload`, реальный multipart-загрузчик файла на путь из
+`DB_TYPES[].path`, тот же `isAdmin()`-гейт, что `updateAction`) — админ,
+у которого уже есть купленный/скачанный файл базы, реально ставит его на
+диск; `serializeDbType()`'s `time` теперь настоящий `filemtime()`
+(верифицировано против легаси `DownloadManager::timestamp()` +
+`Core\Model\AbstractModel::DATETIME_FORMAT`), а не всегда `null`.
+
+**НЕ сделано, осознанно**: `updateAction` (`?object=geoDbs.update`)
+по-прежнему 501 для реального сценария "скачать саму версию с сайта
+провайдера" (tds.io/maxmind/ip2location/sypex/proip) — это требует
+настоящих оплаченных лицензионных ключей у каждого провайдера, которых у
+этой сессии нет, и живого сетевого запроса наружу (вне Docker-окружения
+проекта). Не додумано и не сделано наугад — тот же принцип "verify,
+don't just please".
+
+Тесты: `tests/Feature/GeoDbsTest.php` — 5 новых (upload реально ставит
+файл, `exists`/`installed`/`time` реально флипаются на настоящий
+`filemtime()`, 403 не-админу, 422 неизвестный id/internal-тип без path,
+422 без файла). Фикстурный файл каждый раз удаляется в `afterEach`
+(путь совпадает с тем, что traffic-core's `GeoDbResolver` читает в
+рантайме — важно не оставить мусор там). Полный `./vendor/bin/pest` —
+358/358, `php -l` чисто.
 
 ### 3.2 Conversions — import и updateCostDefinition
 `backend/app/Http/Controllers/Admin/ConversionsController.php`:

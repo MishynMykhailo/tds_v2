@@ -4,6 +4,7 @@ use App\Models\Setting;
 use App\Models\User;
 use App\Services\AuthService;
 use Database\Factories\UserFactory;
+use Illuminate\Http\UploadedFile;
 
 /*
 |--------------------------------------------------------------------------
@@ -199,4 +200,84 @@ it('returns a 500 for update with an unknown db id', function () {
     $response = $this->postJson(geoDbsEndpoint('update'), ['id' => 'not_a_real_db']);
 
     $response->assertStatus(500);
+});
+
+/*
+|--------------------------------------------------------------------------
+| geoDbs.upload — manual file install (2026-09-03 addition, backlog 3.1)
+|--------------------------------------------------------------------------
+| ip2location_lite's real path (var/geoip/IP2Location/lite/
+| IP2LOCATION-LITE-DB3.BIN) is the SAME path traffic-core's GeoDbResolver
+| reads at runtime by default — the fixture file this test uploads is not
+| a real .BIN, so it's always deleted again after each test to avoid
+| corrupting anything a live traffic-core run might read.
+*/
+afterEach(function () {
+    @unlink(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN'));
+});
+
+it('installs an uploaded file for a known db type and flips exists/installed/time to real values', function () {
+    $admin = UserFactory::new()->admin()->create();
+    actingAsForGeoDbs($admin);
+
+    $file = UploadedFile::fake()->create('IP2LOCATION-LITE-DB3.BIN', 10);
+
+    $response = $this->post(geoDbsEndpoint('upload'), ['id' => 'ip2location_lite', 'file' => $file]);
+
+    $response->assertStatus(200);
+    $data = $response->json();
+
+    expect($data['exists'])->toBeTrue();
+    expect($data['installed'])->toBeTrue();
+    expect($data['time'])->not->toBeNull();
+    expect(file_exists(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN')))->toBeTrue();
+
+    // Real filemtime(), not a fabricated value.
+    $expected = date('Y-m-d H:i:s', filemtime(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN')));
+    expect($data['time'])->toBe($expected);
+
+    // index also reflects it afterwards.
+    $index = $this->getJson(geoDbsEndpoint('index'));
+    $indexed = collect($index->json())->firstWhere('id', 'ip2location_lite');
+    expect($indexed['exists'])->toBeTrue();
+});
+
+it('denies upload to a non-admin user with a 403', function () {
+    $user = UserFactory::new()->create();
+    actingAsForGeoDbs($user);
+
+    $file = UploadedFile::fake()->create('IP2LOCATION-LITE-DB3.BIN', 10);
+    $response = $this->post(geoDbsEndpoint('upload'), ['id' => 'ip2location_lite', 'file' => $file]);
+
+    $response->assertStatus(403);
+    expect(file_exists(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN')))->toBeFalse();
+});
+
+it('rejects upload for an unknown db id with a 422', function () {
+    $admin = UserFactory::new()->admin()->create();
+    actingAsForGeoDbs($admin);
+
+    $file = UploadedFile::fake()->create('whatever.bin', 10);
+    $response = $this->post(geoDbsEndpoint('upload'), ['id' => 'not_a_real_db', 'file' => $file]);
+
+    $response->assertStatus(422);
+});
+
+it('rejects upload for the internal db type with no installable path', function () {
+    $admin = UserFactory::new()->admin()->create();
+    actingAsForGeoDbs($admin);
+
+    $file = UploadedFile::fake()->create('whatever.bin', 10);
+    $response = $this->post(geoDbsEndpoint('upload'), ['id' => 'user_bot_ip_db', 'file' => $file]);
+
+    $response->assertStatus(422);
+});
+
+it('rejects an upload request with no file', function () {
+    $admin = UserFactory::new()->admin()->create();
+    actingAsForGeoDbs($admin);
+
+    $response = $this->post(geoDbsEndpoint('upload'), ['id' => 'ip2location_lite']);
+
+    $response->assertStatus(422);
 });
