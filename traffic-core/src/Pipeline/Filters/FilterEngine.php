@@ -46,8 +46,12 @@ class FilterEngine
      *                       fromRequest()`), `$isBot` depends on
      *                       Settings + device-detector/DB lookups, so it
      *                       doesn't belong in that class's contract.
+     * @param  bool  $isUsingProxy  `Payload::$isUsingProxy`, resolved the
+     *                       same way and for the same reason as `$isBot`
+     *                       above — see `Pipeline\Proxy\
+     *                       ProxyDetectionResolver`.
      */
-    public static function evaluate(string $name, string $mode, mixed $payload, array $signal, int $streamId, bool $isBot = false): ?bool
+    public static function evaluate(string $name, string $mode, mixed $payload, array $signal, int $streamId, bool $isBot = false, bool $isUsingProxy = false): ?bool
     {
         if (self::isAnyParamName($name)) {
             return self::anyParam($name, $mode, $payload, $signal);
@@ -65,6 +69,7 @@ class FilterEngine
             'language' => self::language($mode, $payload, $signal),
             'limit' => self::limit($mode, $payload, $streamId, $signal),
             'bot' => self::bot($mode, $isBot),
+            'proxy' => self::proxy($mode, $isUsingProxy),
             default => null,
         };
     }
@@ -84,6 +89,21 @@ class FilterEngine
     private static function bot(string $mode, bool $isBot): bool
     {
         return ($isBot && $mode === 'accept') || (! $isBot && $mode === 'reject');
+    }
+
+    /**
+     * Port of legacy `Component\StreamFilters\Filter\Proxy::isPass()` —
+     * same literal shape as `bot()` above: `mode=accept` passes only
+     * proxy traffic, `mode=reject` passes only non-proxy traffic. Backed
+     * by `Payload::$isUsingProxy` (`Pipeline\Proxy\ProxyDetectionResolver`
+     * — the header-based half of legacy's detection; the GeoDb
+     * `PROXY_TYPE` half needs the paid IP2Location PX tier, not available
+     * here, same documented gap as the `bot` filter's GeoDb `BOT_TYPE`
+     * check).
+     */
+    private static function proxy(string $mode, bool $isUsingProxy): bool
+    {
+        return ($isUsingProxy && $mode === 'accept') || (! $isUsingProxy && $mode === 'reject');
     }
 
     private static function isAnyParamName(string $name): bool

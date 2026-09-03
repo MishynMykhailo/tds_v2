@@ -5,6 +5,7 @@ namespace TrafficCore\Pipeline;
 use TrafficCore\BotDetection\BotDetectionService;
 use TrafficCore\Pipeline\Device\DeviceInfoResolver;
 use TrafficCore\Pipeline\GeoDb\GeoDbResolver;
+use TrafficCore\Pipeline\Proxy\ProxyDetectionResolver;
 use TrafficCore\Pipeline\Visitor\VisitorResolver;
 
 /**
@@ -31,7 +32,9 @@ use TrafficCore\Pipeline\Visitor\VisitorResolver;
  * available to `ChooseStreamStage`'s `bot` `StreamFilter` — which in
  * THIS pipeline's ordering (see `public/index.php`'s ordering-deviation
  * note) runs before `BuildRawClickStage`, same as it needs to run before
- * `ChooseStreamStage` in legacy's own (different) ordering.
+ * `ChooseStreamStage` in legacy's own (different) ordering. `payload->
+ * isUsingProxy` (`Proxy\ProxyDetectionResolver`) is resolved here for the
+ * exact same reason, feeding the `proxy` `StreamFilter`.
  *
  * GeoDb/device resolution failures are swallowed by their resolvers
  * (null fields, never an exception) — but a resolved visitor id of 0
@@ -46,6 +49,7 @@ class ResolveVisitorStage
         private DeviceInfoResolver $device = new DeviceInfoResolver(),
         private VisitorResolver $visitors = new VisitorResolver(),
         private BotDetectionService $botDetection = new BotDetectionService(),
+        private ProxyDetectionResolver $proxyDetection = new ProxyDetectionResolver(),
     ) {
     }
 
@@ -61,6 +65,7 @@ class ResolveVisitorStage
         $payload->geoDevice = ['geo' => $geo, 'device' => $deviceInfo];
         $payload->visitorId = $this->visitors->resolve($ip, $userAgent, $geo, $deviceInfo, $language);
         $payload->isBot = $this->botDetection->resolve($deviceInfo['is_bot'] ?? null, $userAgent, $ip);
+        $payload->isUsingProxy = $this->proxyDetection->resolve($payload->request);
 
         return $payload;
     }

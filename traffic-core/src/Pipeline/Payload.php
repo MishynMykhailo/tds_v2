@@ -90,6 +90,18 @@ class Payload
     public bool $isBot = false;
 
     /**
+     * Real proxy verdict — port of legacy `RawClick::isUsingProxy()`'s
+     * resolved value (header-based half only, see
+     * `Pipeline\Proxy\ProxyDetectionResolver`'s docblock for the GeoDb
+     * half that isn't portable here). Computed in `ResolveVisitorStage`,
+     * same ordering reason as `$isBot` above — the `proxy` `StreamFilter`
+     * (`Filters\FilterEngine::evaluate()`) needs it before
+     * `ChooseStreamStage` runs. `BuildRawClickStage` reads this same
+     * resolved value for `clicks.is_using_proxy`.
+     */
+    public bool $isUsingProxy = false;
+
+    /**
      * Redis lookup token for the offer-attribution flow — see
      * `GenerateTokenStage`/`LpTokenService`. Null when no offer was
      * chosen and no landing needed one either (see `$needToken` below).

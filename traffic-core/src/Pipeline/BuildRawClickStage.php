@@ -37,14 +37,14 @@ use TrafficCore\Pipeline\Visitor\DictionaryRepository;
  * NOT ported — needs that whole search-engine-pattern dataset, out of
  * scope here; only the direct `?keyword=` param is honored.
  *
- * `_checkIfBot()` IS now ported (see `TrafficCore\BotDetection\
- * BotDetectionService` for the full port + what's deliberately excluded
- * from it) — `is_bot` below just reads `payload->isBot`, resolved
- * earlier by `ResolveVisitorStage` (needed there, not here, so
- * `ChooseStreamStage`'s `bot` filter can consult it too — see that
- * stage's docblock for why). `_checkIfProxy()` is still NOT ported (no
- * `ProxyService`/webproxy-detection runtime exists) — `clicks.
- * is_using_proxy` stays at its column default (`0`).
+ * `_checkIfBot()`/`_checkIfProxy()` are both now ported (see
+ * `TrafficCore\BotDetection\BotDetectionService`/`Pipeline\Proxy\
+ * ProxyDetectionResolver` for the full ports + what's deliberately
+ * excluded from each) — `is_bot`/`is_using_proxy` below just read
+ * `payload->isBot`/`payload->isUsingProxy`, both resolved earlier by
+ * `ResolveVisitorStage` (needed there, not here, so `ChooseStreamStage`'s
+ * `bot`/`proxy` filters can consult them too — see that stage's docblock
+ * for why).
  */
 class BuildRawClickStage
 {
@@ -94,6 +94,7 @@ class BuildRawClickStage
             'external_id_id' => $dict->findOrCreateByValue('ref_external_ids', $get('external_id')),
             'cost' => $get('cost') ?? 0,
             'is_bot' => $payload->isBot ? 1 : 0,
+            'is_using_proxy' => $payload->isUsingProxy ? 1 : 0,
         ];
 
         $payload->clickFields = [

@@ -1500,10 +1500,11 @@ fallback). Обычный Chrome UA → 200, `is_bot=0`, `stream_id`=regular.
 settings) удалены после проверки. `php -l` чисто на все 11 изменённых +
 1 новый файл.
 
-Не в скоупе (осознанно, не забыто): geo/device/proxy/uniqueness/imklo/
+Не в скоупе (осознанно, не забыто): geo/device/uniqueness/imklo/
 hide_click остаются fail-open в `FilterEngine` (только `bot` реализован
 в этом раунде — это всё, что было запрошено); `_checkIfProxy()`
-(`is_using_proxy`) не портирован, нет `ProxyService`-рантайма.
+(`is_using_proxy`) на тот момент не был портирован — **портирован позже,
+см. запись "Proxy-детекция" ниже**.
 
 ---
 
@@ -2026,6 +2027,73 @@ Verification: `backend/./vendor/bin/pest` — 383/383 (было 384 до сес�
 префиксом `[S1]`/`[X2]` подтверждён на живой фикстуре (`campaigns.
 parameters` JSON), очищено (`UPDATE ... SET parameters=NULL`). `php -l`
 чисто на всех изменённых файлах.
+
+---
+
+## Proxy-детекция (`_checkIfProxy`) — 2026-09-03
+
+По прямому запросу пользователя ("доделай бот-детекцию") перепроверил
+`_checkIfProxy()` — легаси-докблок в traffic-core утверждал "нет
+ProxyService-рантайма", но реальный `Traffic\Device\Service\
+ProxyService::usingProxy()` — ЧИСТАЯ проверка HTTP-заголовков
+(X-Forwarded-For/X-Real-IP/Forwarded/CF-*), без единого внешнего вызова
+или платных данных. GeoDb-половина (`IpInfoType::PROXY_TYPE`) — да,
+недостижима (тот же платный IP2Location PX-тир, что и `BOT_TYPE` для
+ботов), но заголовочная половина была полностью портируемой и просто не
+была замечена/начата раньше.
+
+**Реальный баг легаси, найденный при чтении, не воспроизведён буквально**:
+`usingProxy()` содержит дублирующее, логически недостижимое вложенное
+условие (`if (isBehindCloudFlare && isXffContainsCfcip) { if
+(isBehindCloudFlare && !isXffContainsCfcip) {...} return false; }` —
+внутренний `if` требует `!isXffContainsCfcip`, но внешний уже доказал
+`isXffContainsCfcip === true`, так что внутренняя ветка математически
+недостижима ни при каких входных данных). Порт (`TrafficCore\Pipeline\
+Proxy\ProxyDetectionResolver`) реализует упрощённую, поведенчески
+идентичную версию без мёртвой ветки (проверено полным перебором обеих
+веток буля, не догадкой).
+
+Механизм: `bindClient` за CloudFlare (есть `CF-IPCountry`/
+`CF-Connecting-IP`/`CF-Visitor`) И `CF-Connecting-IP` реально входит в
+`X-Forwarded-For` -> НЕ прокси (это легитимный CDN-проброс, не
+пользовательский прокси). Иначе — 2+ различных IP в `X-Forwarded-For` ->
+прокси.
+
+Подключено той же схемой, что уже была для `is_bot`: `Payload::
+$isUsingProxy` резолвится в `ResolveVisitorStage` (до `ChooseStreamStage`,
+чтобы `proxy`-фильтр на `forced`-потоке успел его увидеть) через новый
+`ProxyDetectionResolver::resolve($payload->request)`. `FilterEngine::
+evaluate()` — новый `proxy`-кейс (`$isUsingProxy` — новый trailing-
+параметр, тем же способом, что `$isBot`), `CheckFilters::isPass()`/
+`StreamRotator`/`ChooseStreamStage` прокидывают его насквозь.
+`BuildRawClickStage` пишет реальное `clicks.is_using_proxy` (было
+всегда 0 — дефолт колонки). `ClickMacroValues`'s `is_using_proxy`-макрос
+теперь реальный (был хардкод `'0'`, тот же паттерн, что раньше нашли и
+починили для `is_bot`).
+
+Verification (живой, Docker `tds2-mysql`/`tds2-redis`, traffic-core
+`php -S`+`router.php`, ручной прогон `bin/process_click_queue.php`
+кратким запуском+`pkill` — воркер-контейнер не поднят по умолчанию, а
+`StoreRawClickStage` пишет клики асинхронно через Redis-очередь, без
+воркера строки в `clicks` не появляются): кампания + `forced`-поток
+(фильтр `proxy`/`accept`, action `status404`). Обычный запрос (без
+XFF) -> 200, `is_using_proxy=0`. `X-Forwarded-For: 1.2.3.4, 5.6.7.8` (2
+разных IP) -> 404 (роутится на forced-поток), `is_using_proxy=1`.
+`X-Forwarded-For: 1.2.3.4, 1.2.3.4` (один IP дважды) -> 200,
+`is_using_proxy=0` (не прокси). `CF-Connecting-IP: 9.9.9.9` +
+`X-Forwarded-For: 9.9.9.9` (легитимный CloudFlare-проброс) -> 200,
+`is_using_proxy=0` (правильно НЕ помечен как прокси). Побочно
+подтверждено: curl'ов дефолтный User-Agent (`curl/...`) реально ловится
+как бот (`is_bot=1`) существующей бот-детекцией — не регрессия, реальный
+UA-сигнатурный список так и должен работать; с настоящим браузерным UA
+— `is_bot=0`. Все фикстуры (campaign/stream/stream_filters/clicks)
+удалены после проверки. `php -l` чисто на всех 9 изменённых/новых
+файлов.
+
+Не в скоупе (осознанно, не по забывчивости): GeoDb-половина
+`_checkIfProxy()` (`PROXY_TYPE`, платный тир) и geo/device/uniqueness/
+imklo/hide_click фильтры (тот же прецедент, что раньше — не запрошены
+явно в этот раз).
 
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

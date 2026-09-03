@@ -30,11 +30,12 @@ use TrafficCore\Db;
  * `forcedCampaignId` handling exactly (resolve by id directly, consume
  * and null the field, skip rotation entirely).
  *
- * `payload->isBot` (resolved by `ResolveVisitorStage`, which runs before
- * this stage) is passed into `StreamRotator` so `CheckFilters` can
- * evaluate a `bot`-type `StreamFilter` — the real, current legacy
- * mechanism for routing bot traffic to a dedicated `type='forced'`
- * stream (see `Filters\FilterEngine::bot()`'s docblock).
+ * `payload->isBot`/`payload->isUsingProxy` (both resolved by
+ * `ResolveVisitorStage`, which runs before this stage) are passed into
+ * `StreamRotator` so `CheckFilters` can evaluate `bot`/`proxy`-type
+ * `StreamFilter`s — the real, current legacy mechanism for routing
+ * bot/proxy traffic to a dedicated `type='forced'` stream (see
+ * `Filters\FilterEngine::bot()`/`proxy()`'s docblocks).
  *
  * NOT ported (see docs/TRAFFIC_CORE_PLAN.md): the `landings`/`offers`
  * schema branch (handled by separate `ChooseLandingStage`/
@@ -72,7 +73,7 @@ class ChooseStreamStage
         $campaignId = $payload->campaign['id'];
         $campaignType = $payload->campaign['type'] ?? 'weight';
 
-        $rotator = new StreamRotator($payload->signal, $payload->campaign, $payload->isBot);
+        $rotator = new StreamRotator($payload->signal, $payload->campaign, $payload->isBot, $payload->isUsingProxy);
         $stream = null;
 
         // Tier 1: forced.

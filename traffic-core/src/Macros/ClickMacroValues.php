@@ -24,10 +24,11 @@ use TrafficCore\Pipeline\Payload;
  * `browser_version`/`os`/`os_version` (from `payload->geoDevice['device']`),
  * `ip`, `user_agent`, `language`, `current_domain`, `date`, `random`,
  * `token` (the Redis lookup token, if one was generated), `debug`,
- * `is_bot` (real value since `BuildRawClickStage`'s `BotDetectionService`
- * wiring — see that class; runs before this one in the pipeline, so
- * `rawClick['is_bot']` is always already resolved by the time a macro
- * gets substituted).
+ * `is_bot`/`is_using_proxy` (real values since `BuildRawClickStage`'s
+ * `BotDetectionService`/`ProxyDetectionResolver` wiring — see those
+ * classes; both run before this one in the pipeline, so
+ * `rawClick['is_bot']`/`rawClick['is_using_proxy']` are always already
+ * resolved by the time a macro gets substituted).
  *
  * Explicitly NOT ported, with reasons (matches this project's existing
  * per-field gap notes elsewhere, not new decisions made here):
@@ -39,10 +40,8 @@ use TrafficCore\Pipeline\Payload;
  *    (IP2Location LITE tier has none, see Phase 9's finding) — always
  *    empty string, matching legacy's own `?: ""` fallback shape for an
  *    unresolved field, not a fabricated "not detected" claim.
- *  - `is_using_proxy` — no proxy detection runtime exists; always `"0"`,
- *    matching the `clicks` column default (honest "not detected", not
- *    "confirmed clean"). `is_bot` IS real now (see the ported-list note
- *    above) — no longer in this NOT-ported group.
+ *  - (`is_using_proxy` used to live here as "no runtime exists, always
+ *    0" — real now too, see the ported-list note above, same as `is_bot`.)
  *  - `visitor_code`, `destination` — not currently exposed on `Payload`
  *    by any earlier stage.
  *  - `from_file`, `sample`, and custom (admin-defined) macros — the
@@ -118,7 +117,7 @@ class ClickMacroValues
             'carrier' => '',
             'connection_type' => '',
             'is_bot' => (string) (int) ($rawClick['is_bot'] ?? 0),
-            'is_using_proxy' => '0',
+            'is_using_proxy' => (string) (int) ($rawClick['is_using_proxy'] ?? 0),
             'ip' => $payload->signal['ip'] ?? '',
             'user_agent' => $payload->signal['userAgent'] ?? '',
             'ua' => $payload->signal['userAgent'] ?? '',

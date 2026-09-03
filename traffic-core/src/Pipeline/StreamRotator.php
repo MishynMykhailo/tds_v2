@@ -36,11 +36,14 @@ class StreamRotator
      * @param bool $isBot `Payload::$isBot`, resolved by `ResolveVisitorStage`
      *        before `ChooseStreamStage` instantiates this class — threaded
      *        through to `CheckFilters::isPass()` for the `bot` filter type.
+     * @param bool $isUsingProxy `Payload::$isUsingProxy`, resolved the same
+     *        way — threaded through for the `proxy` filter type.
      */
     public function __construct(
         private readonly array $signal,
         private readonly ?array $campaign = null,
         private readonly bool $isBot = false,
+        private readonly bool $isUsingProxy = false,
     ) {
     }
 
@@ -58,7 +61,7 @@ class StreamRotator
     public function chooseByPosition(array $streams): ?array
     {
         foreach ($streams as $stream) {
-            if (CheckFilters::isPass($stream, $this->signal, $this->isBot)) {
+            if (CheckFilters::isPass($stream, $this->signal, $this->isBot, $this->isUsingProxy)) {
                 return $stream;
             }
         }
@@ -130,7 +133,7 @@ class StreamRotator
             $weight = (int) $stream['weight'];
 
             if ($currentWeight <= $rand && $rand < $currentWeight + $weight) {
-                if (CheckFilters::isPass($stream, $this->signal, $this->isBot)) {
+                if (CheckFilters::isPass($stream, $this->signal, $this->isBot, $this->isUsingProxy)) {
                     return $stream;
                 }
 
