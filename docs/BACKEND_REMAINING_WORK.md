@@ -430,11 +430,11 @@ PORTING_LOG.md` ("Разбор оставшихся контрактных па�
 бэкенда): Auth, Groups, Campaigns, Streams, Offers, Domains,
 TrafficSources, Users, Settings, ApiKeys, Triggers, FavouriteStreams,
 StreamFilters/Actions/Events/Types/Schemas, Dics, Profile,
-UserPreferences, AffiliateNetworks, Landings, Botlist, **Labels,
-GeoProfiles (обе новые, эта сессия — по 3 реальных бага найдено и
-исправлено в каждой, см. docs/PORTING_LOG.md)**.
+UserPreferences, AffiliateNetworks, Landings, Botlist, Labels,
+GeoProfiles, **GeoDb (2026-09-03 — 6 тестов, реальный legacy-only edge
+-кейс найден и задокументирован, см. docs/PORTING_LOG.md)**.
 
-**НЕ покрыты (следующие по очереди)**: GeoDb, Conversions,
+**НЕ покрыты (следующие по очереди)**: Conversions,
 Reports, Editor, Cleaner, весь кластер ThirdPartyIntegration/
 CampaignIntegration (TPI, TpiMandatory, Facebook/AppsFlyer-интеграции,
 CodePresets, KClientJsPreset), Macros, Branding, IpInfoDataTypes.
