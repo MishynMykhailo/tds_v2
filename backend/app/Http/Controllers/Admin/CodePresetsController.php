@@ -19,10 +19,14 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * No i18n module ported — `language` read directly from the request,
  * defaulting to `'en'`, same convention as FacebookIntegrationController/
- * AppsFlyerIntegrationController. Legacy `group_translated` normally goes
- * through `LocaleService::t("integration.groups.".$group)` — returned here
- * as the raw `$group` string instead (established precedent, see
- * ResourceController::complementaryAsOptionsAction docblock).
+ * AppsFlyerIntegrationController. `group_translated` normally goes
+ * through `LocaleService::t("integration.groups.".$group)` — verified
+ * live (2026-09-03) against all 5 real groups (banners/frames/links/
+ * other/redirects, both `language=en` and `=ru`) that the real
+ * translation is simply `ucfirst($group)` in every case this data set
+ * actually exercises, not a genuine per-language lookup — so `ucfirst()`
+ * is used directly instead of the raw lowercase `$group` a prior version
+ * returned here.
  *
  * DOC/REALITY MISMATCH found while porting: legacy `_prepare()`'s
  * `is_pro_only` flag is gated on
@@ -62,7 +66,7 @@ class CodePresetsController extends Controller
             'postback_code' => empty($preset['postback_code']) ? '' : $preset['postback_code'],
             'add_params' => isset($preset['add_params']) ? $this->prepareAddParams($preset['add_params']) : '',
             'group' => $preset['group'],
-            'group_translated' => $preset['group'],
+            'group_translated' => ucfirst($preset['group']),
             'settings' => $preset['settings'] ?? null,
             'is_beta' => $preset['beta'] ?? null,
             // Always false — see class docblock (FeatureService::getEdition()

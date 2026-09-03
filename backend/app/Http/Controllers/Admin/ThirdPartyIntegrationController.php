@@ -161,15 +161,15 @@ class ThirdPartyIntegrationController extends Controller
         $integration = ThirdPartyIntegration::find($id);
 
         if (! $integration) {
-            // INTENTIONAL DEVIATION: legacy `updateValues()` silently no-ops
-            // on a missing id, then re-fetches (also null), and the
-            // serializer's `extra()` auto-vivifies `$data["settings"]` on a
-            // null array into `['id' => null]` — producing HTTP 200 with
-            // `{"data": {"id": null}}` instead of a real error. Same class
-            // of legacy bug as DomainsController::showAction() (see its
-            // docblock) — a clean 404 is preferred here instead of
-            // replicating that half-null 200 body.
-            return $this->notFound('Third party integration not found');
+            // CORRECTION (2026-09-03): a prior version of this docblock
+            // guessed legacy silently no-ops here (same class as a
+            // DomainsController quirk) - live-verified against port 8090
+            // that's wrong, same lesson as the real Domains finding:
+            // `ThirdPartyIntegrationService::updateValues()` -> `find()`
+            // really does throw a `NotFoundError`, exact message
+            // `"Component\ThirdPartyIntegration\Model\
+            // ThirdPartyIntegration #<id> not found"`, confirmed live.
+            return $this->notFound("Component\\ThirdPartyIntegration\\Model\\ThirdPartyIntegration #{$id} not found");
         }
 
         // Legacy `ThirdPartyIntegrationService::updateValues()`: MERGES new
@@ -208,9 +208,9 @@ class ThirdPartyIntegrationController extends Controller
         $integration = ThirdPartyIntegration::find($id);
 
         if (! $integration) {
-            // Same deviation as updateAction() above — clean 404 instead of
-            // legacy's `{"data": {"id": null}}` 200.
-            return $this->notFound('Third party integration not found');
+            // Same real legacy NotFoundError as updateAction() above -
+            // exact message verified live, not guessed.
+            return $this->notFound("Component\\ThirdPartyIntegration\\Model\\ThirdPartyIntegration #{$id} not found");
         }
 
         return response()->json(['data' => $this->serializeOne($integration)]);

@@ -232,8 +232,17 @@ class TpiMandatoryController extends Controller
 
     /**
      * Port of legacy `CampaignRepository::listAsOptions($campaigns, $key,
-     * $addBlank)`. `group` is hardcoded to "Default" — Groups module not
-     * ported yet (same TODO as CampaignsController::listAsOptionsAction()).
+     * $addBlank)`.
+     *
+     * CORRECTION (2026-09-03): a prior version of this hardcoded `group`
+     * to "Default" unconditionally, citing "Groups module not ported yet"
+     * — stale, Groups was ported for Campaigns earlier this session (see
+     * CampaignsController::showAction()'s real `Group::find()` lookup).
+     * Real legacy `listAsOptions()` does a real `GroupsRepository::
+     * getName($campaign->getGroupId())` lookup, falling back to "Default"
+     * only when that's null (application/Traffic/Repository/
+     * CampaignRepository.php:67-68) — matched here the same way
+     * CampaignsController already does.
      *
      * @param  array<int, Campaign>  $campaigns
      */
@@ -254,7 +263,15 @@ class TpiMandatoryController extends Controller
                 'id' => $campaign->id,
                 'name' => $campaign->name,
                 'group_id' => $campaign->group_id,
-                'group' => 'Default',
+                // "No group", not "Default" - this is the same
+                // LocaleService::t("groups.default") fallback as
+                // CampaignsController::resolveGroup(), confirmed live
+                // against legacy port 8090's real tpimandatory.all output
+                // for a group-less campaign (not the different, literal
+                // "Default" CampaignSerializer uses for campaigns.show).
+                'group' => $campaign->group_id
+                    ? \App\Models\Group::find($campaign->group_id)?->name
+                    : 'No group',
                 'value' => (int) $campaign->{$key},
             ];
         }

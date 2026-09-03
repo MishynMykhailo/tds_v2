@@ -201,7 +201,7 @@ it('lists campaigns as options in the {id,name,group_id,group,value} shape', fun
     }
 });
 
-it('listAsOptions resolves the real group name, and defaults ungrouped campaigns to "Default"/group_id 0', function () {
+it('listAsOptions resolves the real group name, and defaults ungrouped campaigns to "No group"/group_id 0', function () {
     $group = GroupFactory::new()->create(['name' => 'My Real Group']);
     $grouped = CampaignFactory::new()->create(['group_id' => $group->id]);
     $ungrouped = CampaignFactory::new()->create(['group_id' => 0]);
@@ -213,7 +213,12 @@ it('listAsOptions resolves the real group name, and defaults ungrouped campaigns
 
     expect($byId[$grouped->id]['group'])->toBe('My Real Group');
     expect($byId[$grouped->id]['group_id'])->toBe($group->id);
-    expect($byId[$ungrouped->id]['group'])->toBe('Default');
+    // "No group", not "Default" - listAsOptionsAction() goes through
+    // CampaignRepository::listAsOptions()'s LocaleService::t("groups.default")
+    // in legacy, a DIFFERENT fallback string than showAction()'s literal
+    // "Default" (CampaignSerializer) - confirmed live against legacy
+    // port 8090's real campaigns.listAsOptions output (2026-09-03).
+    expect($byId[$ungrouped->id]['group'])->toBe('No group');
     expect($byId[$ungrouped->id]['group_id'])->toBe(0);
 });
 

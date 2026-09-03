@@ -473,13 +473,20 @@ class CampaignsController extends Controller
     }
 
     /**
-     * Legacy `CampaignSerializer`: `empty(group_id)` -> `group_id = 0` +
-     * translated "groups.default" (this project has no i18n yet — same
-     * precedent as `ResourceController`/`GeoProfiles` — hardcoded
-     * "Default" here, matching the string this stub already returned).
-     * A real group_id whose row no longer exists (deleted group) legally
-     * resolves to `null` (`EntityRepository::getName()`'s own behavior
-     * for a miss) — not fabricated as "Default" or omitted.
+     * CORRECTION (2026-09-03): a prior version of this returned "Default"
+     * here (copied from `showAction()`'s own fallback, which really IS a
+     * literal "Default" per `CampaignSerializer`) — but this method backs
+     * `listAsOptionsAction()`, which goes through the DIFFERENT legacy
+     * code path `CampaignRepository::listAsOptions()` ->
+     * `LocaleService::t("groups.default")`, whose real English string
+     * (application/Component/Groups/translations/en.php) is "No group",
+     * confirmed live against legacy port 8090
+     * (`?object=campaigns.listAsOptions`). Two genuinely different legacy
+     * fallback strings for two different endpoints, not one shared
+     * constant. A real group_id whose row no longer exists (deleted
+     * group) legally resolves to `null`
+     * (`EntityRepository::getName()`'s own behavior for a miss) — not
+     * fabricated as "No group" or omitted.
      *
      * @param  \Illuminate\Support\Collection<int, string>  $groupNames  group_id => name
      * @return array{0: int, 1: ?string}
@@ -487,7 +494,7 @@ class CampaignsController extends Controller
     private function resolveGroup(?int $groupId, \Illuminate\Support\Collection $groupNames): array
     {
         if (empty($groupId)) {
-            return [0, 'Default'];
+            return [0, 'No group'];
         }
 
         return [$groupId, $groupNames->get($groupId)];
