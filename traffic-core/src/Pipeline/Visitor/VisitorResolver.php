@@ -65,7 +65,11 @@ class VisitorResolver
         // string) rather than aborting visitor resolution, since a click
         // must never be lost over GeoDb/device concerns.
         $ipId ??= $this->dictionaries->findOrCreateByValue('ref_ips', 0);
-        $userAgentId ??= $this->dictionaries->findOrCreateByValue('ref_user_agents', '');
+        // allowEmptyString: true — an empty UA must still resolve to a
+        // REAL row (see DictionaryRepository::findOrCreateByValue()'s
+        // docblock; without this flag this fallback was a silent no-op,
+        // found live via an uncaught NOT NULL PDOException).
+        $userAgentId ??= $this->dictionaries->findOrCreateByValue('ref_user_agents', '', true);
 
         $countryId = $this->dictionaries->findOrCreateByValue('ref_countries', $geo['country'] ?? null);
         $regionId = $this->dictionaries->findOrCreateByValue('ref_regions', $geo['region'] ?? null);

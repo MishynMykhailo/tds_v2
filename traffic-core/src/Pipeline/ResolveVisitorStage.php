@@ -2,6 +2,7 @@
 
 namespace TrafficCore\Pipeline;
 
+use TrafficCore\BotDetection\BotDetectionService;
 use TrafficCore\Pipeline\Device\DeviceInfoResolver;
 use TrafficCore\Pipeline\GeoDb\GeoDbResolver;
 use TrafficCore\Pipeline\Visitor\VisitorResolver;
@@ -23,7 +24,14 @@ use TrafficCore\Pipeline\Visitor\VisitorResolver;
  * `DeviceInfoService::info()` (via `DeviceInfoResolver`), then
  * `VisitorService::generateCode()` + the real find-or-create Visitor
  * lookup (via `VisitorResolver`) — see each of those classes' docblocks
- * for exactly what was/wasn't ported and why.
+ * for exactly what was/wasn't ported and why. Finally resolves
+ * `payload->isBot` (`BotDetection\BotDetectionService`) — deliberately
+ * done HERE, not in `BuildRawClickStage` (which is where legacy's own
+ * `_checkIfBot()` textually lives), because the resolved value must be
+ * available to `ChooseStreamStage`'s `bot` `StreamFilter` — which in
+ * THIS pipeline's ordering (see `public/index.php`'s ordering-deviation
+ * note) runs before `BuildRawClickStage`, same as it needs to run before
+ * `ChooseStreamStage` in legacy's own (different) ordering.
  *
  * GeoDb/device resolution failures are swallowed by their resolvers
  * (null fields, never an exception) — but a resolved visitor id of 0
@@ -37,6 +45,7 @@ class ResolveVisitorStage
         private GeoDbResolver $geoDb = new GeoDbResolver(),
         private DeviceInfoResolver $device = new DeviceInfoResolver(),
         private VisitorResolver $visitors = new VisitorResolver(),
+        private BotDetectionService $botDetection = new BotDetectionService(),
     ) {
     }
 
@@ -51,6 +60,7 @@ class ResolveVisitorStage
 
         $payload->geoDevice = ['geo' => $geo, 'device' => $deviceInfo];
         $payload->visitorId = $this->visitors->resolve($ip, $userAgent, $geo, $deviceInfo, $language);
+        $payload->isBot = $this->botDetection->resolve($deviceInfo['is_bot'] ?? null, $userAgent, $ip);
 
         return $payload;
     }

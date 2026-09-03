@@ -77,6 +77,19 @@ class Payload
     public array $geoDevice = [];
 
     /**
+     * Real bot verdict — port of legacy `RawClick::isBot()`'s resolved
+     * value. Computed once in `ResolveVisitorStage` (device-detector's
+     * `is_bot`, in `geoDevice['device']`, OR'd with
+     * `BotDetection\BotDetectionService::isBot()` — see that class),
+     * BEFORE `ChooseStreamStage` runs, so the `bot` `StreamFilter` (see
+     * `Filters\FilterEngine::evaluate()`) can consult it exactly like
+     * legacy's real `_checkIfBot()` → `ChooseStreamStage` ordering.
+     * `BuildRawClickStage` reads this same resolved value for
+     * `clicks.is_bot` rather than recomputing it.
+     */
+    public bool $isBot = false;
+
+    /**
      * Redis lookup token for the offer-attribution flow — see
      * `GenerateTokenStage`/`LpTokenService`. Null when no offer was
      * chosen and no landing needed one either (see `$needToken` below).

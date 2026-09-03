@@ -33,8 +33,21 @@ use TrafficCore\HitLimit\HitLimitService;
  */
 class FilterEngine
 {
-    /** @param array<string,mixed>|scalar|null $payload */
-    public static function evaluate(string $name, string $mode, mixed $payload, array $signal, int $streamId): ?bool
+    /**
+     * @param  array<string,mixed>|scalar|null  $payload
+     * @param  bool  $isBot  `Payload::$isBot`, resolved by `ResolveVisitorStage`
+     *                       BEFORE `ChooseStreamStage` runs — see that
+     *                       stage's docblock. Threaded through the same
+     *                       way `$streamId` is (a plain trailing param —
+     *                       see this method's class docblock for why),
+     *                       not bundled into `$signal`: unlike `$signal`
+     *                       (pure per-request extraction with no DB
+     *                       dependency, built once by `Signal::
+     *                       fromRequest()`), `$isBot` depends on
+     *                       Settings + device-detector/DB lookups, so it
+     *                       doesn't belong in that class's contract.
+     */
+    public static function evaluate(string $name, string $mode, mixed $payload, array $signal, int $streamId, bool $isBot = false): ?bool
     {
         if (self::isAnyParamName($name)) {
             return self::anyParam($name, $mode, $payload, $signal);
@@ -51,8 +64,26 @@ class FilterEngine
             'user_agent' => self::userAgent($mode, $payload, $signal),
             'language' => self::language($mode, $payload, $signal),
             'limit' => self::limit($mode, $payload, $streamId, $signal),
+            'bot' => self::bot($mode, $isBot),
             default => null,
         };
+    }
+
+    /**
+     * Port of legacy `Component\StreamFilters\Filter\IsBot::isPass()` —
+     * literal 1-to-1: `mode=accept` passes only bot traffic, `mode=reject`
+     * passes only non-bot traffic. This is the REAL, current legacy bot-
+     * routing mechanism (a `stream_filters` row with `name='bot'`, created
+     * by legacy migration `20161007163321_migrate_bot_actions_to_forced_
+     * actions.php` on a `type='forced'` stream) — the older `campaigns.
+     * action_for_bots`/`bot_redirect_url`/`bot_text` columns that
+     * migration moved away FROM are dead since 2016 and deliberately NOT
+     * ported (nothing in the current Traffic pipeline reads them —
+     * confirmed via `grep -rn action_for_bots application/Traffic`).
+     */
+    private static function bot(string $mode, bool $isBot): bool
+    {
+        return ($isBot && $mode === 'accept') || (! $isBot && $mode === 'reject');
     }
 
     private static function isAnyParamName(string $name): bool

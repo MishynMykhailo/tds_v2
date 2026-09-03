@@ -65,20 +65,32 @@ class DictionaryRepository
 
     /**
      * Find-or-create a dictionary row by its `value`. Returns null
-     * without touching the DB when `$value` is null/empty — a missing
-     * dimension (e.g. GeoDb returned no city) stays an absent FK, not an
-     * empty-string row.
+     * without touching the DB when `$value` is null (or, by default,
+     * empty-string) — a missing dimension (e.g. GeoDb returned no city)
+     * stays an absent FK, not an empty-string row.
      *
      * @param string|int $value For `ref_ips`, the packed unsigned-int IP;
      *                          for every other table, the raw string value.
+     * @param bool $allowEmptyString When true, only `null` short-circuits
+     *        to "no value" — an empty string IS looked up/created as a
+     *        real dictionary row. Needed by `VisitorResolver`'s
+     *        `ref_user_agents` NOT-NULL fallback for an empty/missing
+     *        User-Agent header: that column can never be left NULL (see
+     *        `visitors.user_agent_id`), so "no UA sent" needs a REAL
+     *        sentinel row, not the collapsed-to-null behavior every other
+     *        caller relies on (found live: without this flag, the
+     *        fallback silently resolved to null too, since it called this
+     *        same method with the same empty string — `visitors` INSERT
+     *        then failed its NOT NULL constraint with an uncaught
+     *        PDOException for any empty-User-Agent request).
      */
-    public function findOrCreateByValue(string $table, string|int|null $value): ?int
+    public function findOrCreateByValue(string $table, string|int|null $value, bool $allowEmptyString = false): ?int
     {
         if (!in_array($table, self::ALLOWED_TABLES, true)) {
             throw new \InvalidArgumentException("Not a known ref_ dictionary table: {$table}");
         }
 
-        if ($value === null || $value === '') {
+        if ($value === null || ($value === '' && !$allowEmptyString)) {
             return null;
         }
 

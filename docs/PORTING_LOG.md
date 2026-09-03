@@ -1412,4 +1412,98 @@ referrer/search_engine/keyword/source и другие NAME-колонки,
 потянет).
 
 ---
+
+## traffic-core — бот-детекция (`_checkIfBot`) — 2026-09-03
+
+По прямому запросу пользователя (не из исходного аудита backend/), вне
+предыдущего "traffic-core полностью готов, не трогать" — реализована
+недостающая часть легаси `BuildRawClickStage::_checkIfBot()`
+(`application/Traffic/Pipeline/Stage/BuildRawClickStage.php`), ранее
+честно помеченная как NOT ported.
+
+Легаси-механизм (прочитан реальный код, не только доклист из плана):
+1. GeoDb `IpInfoType::BOT_TYPE` — первая проверка в `_checkIfBot()`.
+   Подтверждено недостижимо в этом проекте: требует платного IP2Location
+   PX-тира, тут только бесплатный LITE DB3 (см. `GeoDbResolver`'s
+   докблок про ISP — тот же принцип). Не портировано, задокументировано.
+2. `DeviceInfoService::info()`'s `$this->_detector->isBot()`
+   (`matomo/device-detector`, гораздо больше сигнатур, чем
+   `UserBotListService`'s ~50) — но ТОЛЬКО когда включена настройка
+   `check_bot_ua` (`$detector->skipBotDetection(!$toCheckBot)`), иначе
+   detector вообще не проверяет бот-сигнатуры. Если true — authoritative,
+   пропускает шаг 3.
+3. `UserBotListService::isBot()` — `check_bot_empty_ua` (пустой UA),
+   `check_bot_ua` (тот же хардкод-список ~50 сигнатур + кастомный список
+   администратора, `Setting` `bots.additional.signature`,
+   `App\Http\Controllers\Admin\BotlistController`), `check_bot_ip`
+   (диапазон `user_bot_ips.min_ip <= ip2long($ip) <= max_ip`).
+   `check_bot_referer` читается, но нигде не используется в реальном
+   `isBot()` — честный мёртвый легаси-option, не портирован.
+
+**Найдено при чтении, критично для архитектуры**: легаси мигрировал в
+2016 (`application/migrations2/20161007163321_migrate_bot_actions_to_
+forced_actions.php`) с мёртвых `campaigns.action_for_bots`/
+`bot_redirect_url`/`bot_text` колонок на нормальный `StreamFilter`
+(`name='bot'`, `Filter\IsBot::isPass()`) на `type='forced'` потоке —
+это и есть РЕАЛЬНЫЙ, текущий механизм маршрутизации бот-трафика
+(`mode=accept` — поток принимает ТОЛЬКО ботов, `mode=reject` — только
+не-ботов). Просто прописать `clicks.is_bot` было бы половинчатым
+решением — без этого фильтра бот-трафик так и не маршрутизировался бы
+никуда отдельно, только помечался бы в статистике постфактум.
+
+Это потребовало пересмотра порядка стадий: в этом проекте (в отличие от
+легаси, где `BuildRawClickStage` бежит ДО `ChooseStreamStage`) is_bot
+раньше вычислялся бы в `BuildRawClickStage`, который тут работает ПОСЛЕ
+`ChooseStreamStage` (см. `public/index.php`'s "ordering deviation" note,
+Phase 4) — фильтр `bot` не успел бы получить значение вовремя. Решение:
+`payload->isBot` теперь резолвится в `ResolveVisitorStage` (бежит рано,
+сразу после `CaptureSignalStage`, до `ChooseStreamStage`), не в
+`BuildRawClickStage` (тот теперь просто читает уже готовое значение).
+
+Новое: `TrafficCore\BotDetection\BotDetectionService` (шаги 2+3 выше,
+метод `resolve(?bool $deviceIsBot, $ua, $ip)`). `DeviceInfoResolver`
+теперь читает `check_bot_ua` и делает `skipBotDetection()`
+условным вместо всегда-true, возвращает `is_bot` (null когда настройка
+выключена). `FilterEngine::evaluate()` — новый `bot`-кейс (`$isBot` —
+новый trailing-параметр, тем же способом, что `$streamId` для `limit`),
+`CheckFilters::isPass()`/`StreamRotator` прокидывают его насквозь.
+`ClickMacroValues`'s `is_bot`-макрос теперь реальный (раньше хардкод
+`'0'`).
+
+**Побочная находка и фикс (не бот-детекция, вскрыто при живом тесте
+`check_bot_empty_ua`)**: `VisitorResolver`'s NOT-NULL fallback для
+пустого User-Agent (`$userAgentId ??= findOrCreateByValue('ref_user_agents',
+'')`) был мёртвым кодом — `DictionaryRepository::findOrCreateByValue()`
+трактует пустую строку ТАК ЖЕ, как null (`return null`), так что
+фоллбэк вызывал тот же метод с тем же аргументом и тоже получал null.
+Любой запрос с пустым User-Agent падал с необработанным
+`PDOException: Column 'user_agent_id' cannot be null` (500,
+`VisitorResolver.php:90`) — то есть именно тот сценарий, который
+`check_bot_empty_ua` призван обрабатывать, вообще не доходил до
+бот-проверки. Исправлено новым параметром `bool $allowEmptyString`
+(default false — поведение для всех остальных вызовов не меняется).
+
+Verification (живой, Docker `tds2-php-dev` + `php -S`, `tds2-mysql`/
+`tds2-redis`, `deploy_default` сеть): кампания + `forced`-поток (фильтр
+`bot`/`accept`, action `status404`) + `regular`-поток (`do_nothing`,
+fallback). Обычный Chrome UA → 200, `is_bot=0`, `stream_id`=regular.
+`Googlebot` UA → 404, `is_bot=1`, `stream_id`=forced. Пустой UA (с
+`check_bot_empty_ua=1`) → 404, `is_bot=1` (до фикса — 500). IP из
+`user_bot_ips` с обычным UA → 404, `is_bot=1` (изолированная проверка
+`check_bot_ip`, не зависит от UA-сигнатур). Кастомная UA-сигнатура
+(`Setting` `bots.additional.signature`) с UA, которого нет ни в
+хардкод-списке, ни у `matomo/device-detector` → 404, `is_bot=1`
+(изолированная проверка кастомного списка). Инверсия: тот же
+`bot`-фильтр в `mode=reject` пропустил обычный (не-бот) UA на forced-
+поток вместо обычного (валидация REJECT-ветки `FilterEngine::bot()`).
+Все фикстуры (campaign/streams/stream_filters/clicks/user_bot_ips/
+settings) удалены после проверки. `php -l` чисто на все 11 изменённых +
+1 новый файл.
+
+Не в скоупе (осознанно, не забыто): geo/device/proxy/uniqueness/imklo/
+hide_click остаются fail-open в `FilterEngine` (только `bot` реализован
+в этом раунде — это всё, что было запрошено); `_checkIfProxy()`
+(`is_using_proxy`) не портирован, нет `ProxyService`-рантайма.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

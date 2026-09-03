@@ -4,6 +4,7 @@ namespace TrafficCore\Pipeline\Device;
 
 use DeviceDetector\DeviceDetector;
 use DeviceDetector\Parser\Device\AbstractDeviceParser;
+use TrafficCore\Db;
 
 /**
  * Port of legacy `Traffic\Device\Service\DeviceInfoService`
@@ -41,11 +42,21 @@ use DeviceDetector\Parser\Device\AbstractDeviceParser;
  * is dead code in legacy itself. Not ported here — there is no live
  * behavior to reproduce.
  *
- * NOT ported: `is_bot` (bot detection is a separate, not-yet-ported
- * concern in this pipeline; `_findDeviceInfo()`'s WIFI-default-for-
- * mobile-without-connection-type side effect — connection_type is not
- * resolved anywhere in traffic-core, see VisitorResolver's docblock);
- * `device_brand` — legacy stores it as a plain `RawClick` field but
+ * `is_bot` IS now ported (see `resolve()`'s `check_bot_ua`-gated branch,
+ * mirroring legacy's `DeviceInfoService::info()` exactly:
+ * `skipBotDetection(!$toCheckBot)`, and the `is_bot` key only populated
+ * — not even present, hence the explicit `null` in `$empty` here rather
+ * than a fabricated `false` — when `$toCheckBot` is truthy). Consumed by
+ * `TrafficCore\Pipeline\BuildRawClickStage` as the FIRST bot signal
+ * (device-detector's own, much larger bot-signature database taking
+ * precedence over `BotDetectionService`'s ~50-entry hardcoded list),
+ * exactly matching legacy `_checkIfBot()`'s `if (!$rawClick->isBot())`
+ * short-circuit order.
+ *
+ * NOT ported: `_findDeviceInfo()`'s WIFI-default-for-mobile-without-
+ * connection-type side effect — connection_type is not resolved anywhere
+ * in traffic-core, see VisitorResolver's docblock); `device_brand` —
+ * legacy stores it as a plain `RawClick` field but
  * `visitors` has no `device_brand` column (confirmed via `DESCRIBE`),
  * so it is legitimately dropped at the storage layer in legacy too, not
  * a gap introduced here.
@@ -78,10 +89,12 @@ class DeviceInfoResolver
     private ?DeviceDetector $detector = null;
 
     /**
-     * @return array{browser: ?string, browser_version: ?string, os: ?string, os_version: ?string, device_type: ?string, device_model: ?string}
+     * @return array{browser: ?string, browser_version: ?string, os: ?string, os_version: ?string, device_type: ?string, device_model: ?string, is_bot: ?bool}
      */
     public function resolve(string $userAgent): array
     {
+        $checkBotUa = $this->checkBotUaSetting();
+
         $empty = [
             'browser' => null,
             'browser_version' => null,
@@ -89,6 +102,7 @@ class DeviceInfoResolver
             'os_version' => null,
             'device_type' => null,
             'device_model' => null,
+            'is_bot' => null,
         ];
 
         if (trim($userAgent) === '') {
@@ -96,6 +110,7 @@ class DeviceInfoResolver
         }
 
         $detector = $this->detector();
+        $detector->skipBotDetection(!$checkBotUa);
 
         try {
             $detector->setUserAgent($userAgent);
@@ -115,7 +130,18 @@ class DeviceInfoResolver
             'os_version' => $this->nullIfEmpty($os['version'] ?? null),
             'device_type' => $this->nullIfEmpty($this->convertDeviceType($detector, $os, $browser)),
             'device_model' => $this->nullIfEmpty($this->convertDeviceModel($detector->getBrandName(), $detector->getModel())),
+            'is_bot' => $checkBotUa ? $detector->isBot() : null,
         ];
+    }
+
+    /** Legacy `CachedSettingsRepository::get(Setting::CHECK_BOT_UA)` — same setting `BotDetection\BotDetectionService` reads, default true matches `application/data/data.sql`. */
+    private function checkBotUaSetting(): bool
+    {
+        $stmt = Db::instance()->prepare('SELECT value FROM settings WHERE `key` = ? LIMIT 1');
+        $stmt->execute(['check_bot_ua']);
+        $value = $stmt->fetchColumn();
+
+        return $value === false ? true : (bool) ((int) $value);
     }
 
     private function detector(): DeviceDetector
@@ -124,7 +150,9 @@ class DeviceInfoResolver
             AbstractDeviceParser::setVersionTruncation(AbstractDeviceParser::VERSION_TRUNCATION_NONE);
             $this->detector = new DeviceDetector();
             $this->detector->discardBotInformation();
-            $this->detector->skipBotDetection();
+            // skipBotDetection() is set per-call in resolve() (depends on
+            // the check_bot_ua setting, which resolve() reads fresh every
+            // time — matches legacy's own per-call `skipBotDetection(!$toCheckBot)`).
         }
 
         return $this->detector;

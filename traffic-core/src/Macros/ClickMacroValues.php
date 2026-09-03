@@ -23,7 +23,11 @@ use TrafficCore\Pipeline\Payload;
  * `payload->geoDevice['geo']`), `device_type`/`device_model`/`browser`/
  * `browser_version`/`os`/`os_version` (from `payload->geoDevice['device']`),
  * `ip`, `user_agent`, `language`, `current_domain`, `date`, `random`,
- * `token` (the Redis lookup token, if one was generated), `debug`.
+ * `token` (the Redis lookup token, if one was generated), `debug`,
+ * `is_bot` (real value since `BuildRawClickStage`'s `BotDetectionService`
+ * wiring — see that class; runs before this one in the pipeline, so
+ * `rawClick['is_bot']` is always already resolved by the time a macro
+ * gets substituted).
  *
  * Explicitly NOT ported, with reasons (matches this project's existing
  * per-field gap notes elsewhere, not new decisions made here):
@@ -35,9 +39,10 @@ use TrafficCore\Pipeline\Payload;
  *    (IP2Location LITE tier has none, see Phase 9's finding) — always
  *    empty string, matching legacy's own `?: ""` fallback shape for an
  *    unresolved field, not a fabricated "not detected" claim.
- *  - `is_bot`/`is_using_proxy` — no bot/proxy detection runtime exists;
- *    always `"0"`, matching the `clicks` column defaults these fields
- *    already carry (honest "not detected", not "confirmed clean").
+ *  - `is_using_proxy` — no proxy detection runtime exists; always `"0"`,
+ *    matching the `clicks` column default (honest "not detected", not
+ *    "confirmed clean"). `is_bot` IS real now (see the ported-list note
+ *    above) — no longer in this NOT-ported group.
  *  - `visitor_code`, `destination` — not currently exposed on `Payload`
  *    by any earlier stage.
  *  - `from_file`, `sample`, and custom (admin-defined) macros — the
@@ -112,7 +117,7 @@ class ClickMacroValues
             'operator' => '',
             'carrier' => '',
             'connection_type' => '',
-            'is_bot' => '0',
+            'is_bot' => (string) (int) ($rawClick['is_bot'] ?? 0),
             'is_using_proxy' => '0',
             'ip' => $payload->signal['ip'] ?? '',
             'user_agent' => $payload->signal['userAgent'] ?? '',

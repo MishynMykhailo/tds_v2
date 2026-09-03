@@ -33,10 +33,14 @@ class StreamRotator
      * @param array<string,mixed>|null $campaign Full campaign row — pass
      *        null to disable sticky-stream binding entirely (e.g. from a
      *        call site that doesn't have visitor identity available).
+     * @param bool $isBot `Payload::$isBot`, resolved by `ResolveVisitorStage`
+     *        before `ChooseStreamStage` instantiates this class — threaded
+     *        through to `CheckFilters::isPass()` for the `bot` filter type.
      */
     public function __construct(
         private readonly array $signal,
         private readonly ?array $campaign = null,
+        private readonly bool $isBot = false,
     ) {
     }
 
@@ -54,7 +58,7 @@ class StreamRotator
     public function chooseByPosition(array $streams): ?array
     {
         foreach ($streams as $stream) {
-            if (CheckFilters::isPass($stream, $this->signal)) {
+            if (CheckFilters::isPass($stream, $this->signal, $this->isBot)) {
                 return $stream;
             }
         }
@@ -126,7 +130,7 @@ class StreamRotator
             $weight = (int) $stream['weight'];
 
             if ($currentWeight <= $rand && $rand < $currentWeight + $weight) {
-                if (CheckFilters::isPass($stream, $this->signal)) {
+                if (CheckFilters::isPass($stream, $this->signal, $this->isBot)) {
                     return $stream;
                 }
 

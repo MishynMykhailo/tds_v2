@@ -19,9 +19,9 @@ use TrafficCore\Pipeline\Filters\FilterEngine;
  *
  * Per-filter fail-open (NOT whole-stream, unlike Phase 2): a filter
  * `name` with no `FilterEngine::evaluate()` implementation (GeoDb/
- * device/bot/proxy/uniqueness/imklo/hide_click — see plan doc) is
- * treated as passed for THAT filter only, logged via error_log() and
- * surfaced in `X-Filters-Skipped` as `stream#N:name1,name2`.
+ * device/proxy/uniqueness/imklo/hide_click — see plan doc) is treated as
+ * passed for THAT filter only, logged via error_log() and surfaced in
+ * `X-Filters-Skipped` as `stream#N:name1,name2`.
  *
  * `limit` is now real (hit-limit enforcement, `FilterEngine::limit()` /
  * `TrafficCore\HitLimit\HitLimitService`) — removed from the fail-open
@@ -30,6 +30,12 @@ use TrafficCore\Pipeline\Filters\FilterEngine;
  * class's one call site below passes `(int) $stream['id']` as a new
  * trailing parameter — see `FilterEngine::evaluate()`'s own docblock for
  * why this approach was chosen over the alternatives.
+ *
+ * `bot` is now real too (`BotDetection\BotDetectionService` via
+ * `Payload::$isBot`, resolved by `ResolveVisitorStage` before
+ * `ChooseStreamStage` runs) — also removed from the fail-open list;
+ * threaded through the same way as `$streamId`, as this class's
+ * `isPass()` new trailing `bool $isBot` parameter.
  */
 class CheckFilters
 {
@@ -37,7 +43,7 @@ class CheckFilters
     public static array $skipped = [];
 
     /** @param array<string,mixed> $signal see Signal::fromRequest() */
-    public static function isPass(array $stream, array $signal): bool
+    public static function isPass(array $stream, array $signal, bool $isBot = false): bool
     {
         $rows = self::loadFilters((int) $stream['id']);
 
@@ -50,7 +56,7 @@ class CheckFilters
 
         foreach ($rows as $row) {
             $payload = is_string($row['payload']) ? json_decode($row['payload'], true) : $row['payload'];
-            $passed = FilterEngine::evaluate($row['name'], $row['mode'], $payload, $signal, (int) $stream['id']);
+            $passed = FilterEngine::evaluate($row['name'], $row['mode'], $payload, $signal, (int) $stream['id'], $isBot);
 
             if ($passed === null) {
                 $skippedNames[] = $row['name'];
