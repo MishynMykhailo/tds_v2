@@ -1352,5 +1352,64 @@ Verification (полная цепочка, живьём): `click-api.php` по �
 `Dispatcher/*` разобраны (см. список в начале Фазы 17 в истории сессии).
 Дальше — фронтенд (осознанно отложен).
 
+## backend — раздел 1 backlog'а (BACKEND_REMAINING_WORK.md), пункты 1.1/1.3 — 2026-09-03
+
+**1.1 (ACL на withStatsAction) — аудит был неверен, уже реализовано.**
+Пять контроллеров (Campaigns/Offers/Landings/Streams/TrafficSources)
+несли устаревший докблок "TODO: ACL not wired here yet", но
+`EntityGridBuilder::applyAcl()` уже реально фильтрует по ACL (вызывается
+из `loadEntities()`), фидится `user:`-параметром, который каждый
+`withStatsAction` уже передавал. `tests/Feature/GridAclTest.php` (10
+тестов) уже покрывал это до моей правки. Изменено только 5 докблоков
+(ссылка на реальную реализацию вместо устаревшего TODO), кода не
+трогал. Полный `./vendor/bin/pest` — 350/350 до и после.
+
+**1.3 (ReportsController geo/device/isp измерения) — сделано, аудит
+тоже был частично неверен.** Премиса "паттерн джойна на ref_sources/
+ref_referrers/ref_keywords уже есть, просто не расширен" была ложной —
+`grep` подтвердил: `App\Services\Grid\GridBuilder` был честно
+single-table-only, ни один вызывающий код (ReportsController,
+ConversionsController) никогда не джойнил ни на одну `ref_*` таблицу.
+
+Реализация: `GridBuilder` получил опциональный 4-й конструкторный
+параметр `array $joins = []` — список `[table, first, operator,
+second]`-кортежей, применяется как `leftJoin()` в `baseQuery()` (значит
+— на select/total-count/summary запросы разом). Пустой по умолчанию, не
+ломает единственный другой вызов (`ConversionsController::logAction`,
+таблица `conversions`, без geo/device).
+`ReportsController::GEO_DEVICE_JOINS` — 13 LEFT JOIN-ов
+(`clicks.visitor_id -> visitors -> ref_countries/ref_regions/ref_cities/
+ref_browsers/ref_browser_versions/ref_os/ref_os_versions/
+ref_device_types/ref_device_models/ref_isp/ref_operators/
+ref_connection_types`, все LEFT — FK-и на `visitors` nullable, клик без
+визитора не должен пропадать из отчёта). 12 новых логических колонок в
+`BUILD_COLUMNS_BASE` (`ref_x.value` напрямую, без под-запросов —
+под-запрос как строка сломал бы `FilterOperator::apply()`'s `where()`,
+который использует `columnExpressions[$name]` как ИМЯ колонки, не raw
+SQL) + соответствующие записи в `definitionAction()`.
+
+Попутно исправлена вторая устаревшая докстрока в этом же файле:
+`buildAction()` утверждал "ACL NOT applied — GridBuilder has no ACL
+hook" — тоже неверно, `GridBuilder::baseQuery()` уже применяет
+`campaign_id IN (...)`-рестрикцию через `AclService::
+getAllowedCampaignIds()`, покрыто тем же `GridAclTest.php`
+(`reports.build` тест).
+
+Тесты: 3 новых в `tests/Feature/ReportsTest.php` (реальный join
+возвращает имя измерения; LEFT JOIN не роняет клик без визитора/ref-
+строки; group+filter по `country` с двумя визиторами). Живая проверка —
+не только SQLite Pest-сьют, но и реальный MySQL (`tds2-mysql` в Docker):
+фикстура (`ref_countries`/`ref_ips`/`ref_user_agents`/`visitors`/
+`clicks` через `DB::table()`, нет ещё Eloquent-моделей для этих таблиц)
++ вызов `GridBuilder` напрямую через `php artisan tinker` — джойн
+`clicks -> visitors -> ref_countries` вернул реальное `country=FR`,
+фикстуры удалены. Полный `./vendor/bin/pest` — 353/353, `php -l` чисто
+на `GridBuilder.php`/`ReportsController.php`/`ReportsTest.php`.
+
+Не в скоупе (см. BACKEND_REMAINING_WORK.md 1.3 для деталей):
+referrer/search_engine/keyword/source и другие NAME-колонки,
+`language`/`ip`/`user_agent` (MySQL-only `INET_NTOA`, SQLite-сьют не
+потянет).
+
 ---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*
