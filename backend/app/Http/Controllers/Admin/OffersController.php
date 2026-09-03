@@ -458,8 +458,9 @@ class OffersController extends Controller
      * for every deviation from the real legacy source (metric SQL,
      * meta.total shape, pagination semantics).
      *
-     * TODO: ACL not wired here yet (same TODO as
-     * CampaignsController::withStatsAction()).
+     * ACL is enforced inside EntityGridBuilder::applyAcl() (called from
+     * loadEntities()), fed by the `user:` param passed below — see
+     * tests/Feature/GridAclTest.php for live coverage.
      */
     public function withStatsAction(Request $request): array
     {

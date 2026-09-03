@@ -488,8 +488,9 @@ class CampaignsController extends Controller
      * for every deviation from the real legacy source found while reading
      * it (metric SQL, meta.total shape, pagination semantics).
      *
-     * TODO: ACL not wired here yet (legacy: `AclService::filterByAcl()`
-     * inside `_getEntities()`) — same TODO the task brief calls out.
+     * ACL is enforced inside EntityGridBuilder::applyAcl() (called from
+     * loadEntities()), fed by the `user:` param passed below — see
+     * tests/Feature/GridAclTest.php for live coverage.
      */
     public function withStatsAction(Request $request): array
     {

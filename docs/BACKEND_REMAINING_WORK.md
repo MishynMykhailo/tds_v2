@@ -27,20 +27,25 @@ Claude-Session: <ссылка на текущую сессию>
 
 ## 1. Кросс-каттинг, узкие (быстро закрываются, высокий приоритет)
 
-### 1.1 ACL не подключён к withStatsAction
-Пять контроллеров дают полный доступ к Grid/EntityGrid статистике без
-ACL-фильтрации, хотя `AclService` (`backend/app/Services/AclService.php`)
-уже реально используется в их index/show/create/update:
-- `backend/app/Http/Controllers/Admin/CampaignsController.php`
-- `backend/app/Http/Controllers/Admin/OffersController.php`
-- `backend/app/Http/Controllers/Admin/LandingsController.php`
-- `backend/app/Http/Controllers/Admin/StreamsController.php`
-- `backend/app/Http/Controllers/Admin/TrafficSourcesController.php`
+### 1.1 ACL не подключён к withStatsAction — ЗАКРЫТО, аудит был неверен (2026-09-03)
+Первоначальный аудит ошибся: пять контроллеров (`CampaignsController`,
+`OffersController`, `LandingsController`, `StreamsController`,
+`TrafficSourcesController`) действительно несли устаревший докблок
+"TODO: ACL not wired here yet", но реальная фильтрация УЖЕ реализована
+и работает — каждый `withStatsAction` передаёт `user:
+$this->currentUserService->get()` в `EntityGridBuilder`, а тот
+применяет её в приватном `applyAcl()` (вызывается из `loadEntities()`,
+см. `backend/app/Services/Grid/EntityGridBuilder.php:263,293-316`).
+Живое покрытие уже существует: `backend/tests/Feature/GridAclTest.php`
+(10 тестов, все проходят: admin видит всё, `to_groups_and_selected`
+видит только разрешённое, отсутствие acl_rules = ALLOW_NONE = пустой
+результат, `full_access` видит всё — для campaigns/streams/offers, плюс
+`reports.build`/`conversions.log` тем же ACL-путём).
 
-Задача: найти `withStatsAction`-подобный метод в каждом (искать по TODO
-с идентичным текстом про ACL), подключить `AclService::filterByAcl()`/
-`getAllowedCampaignIds()` так же, как это уже сделано в соседних методах
-того же контроллера — паттерн уже есть в коде, копировать оттуда.
+Сделано в эту сессию: только докблоки очищены (устаревший
+"TODO: ACL not wired here yet" заменён на ссылку на реальную
+реализацию + тест), кода не менялось. Полный `./vendor/bin/pest`
+(350/350) и `php -l` на все 5 контроллеров — чисто.
 
 ### 1.2 Groups — реальные имена вместо null-стаба
 `GroupsController.php` + `Group`-модель уже существуют и подключены в
@@ -117,23 +122,26 @@ Phase 9-10 (`backend/database/migrations/2025_01_01_000029_create_visitors_and_g
 
 ## 4. Preview-изображения, trial-режим, i18n
 
+**Решение пользователя (2026-09-03): в этом раунде делать только
+preview. Trial-режим не портировать вообще (не осознанное отложение
+"навсегда", а просто не в скоупе сейчас). i18n — вынесено в отдельную
+задачу "на доработку", начинать не раньше отдельного запроса.**
+
 - **Preview-изображения лендингов/офферов** (`PreviewImageService` в
   легаси) — явно застаблены `null` в `LandingsController.php`/
   `OffersController.php` (`landing->isLocal()`/`offer->isLocal()`
   preview generation). Нужен реальный генератор скриншота/превью для
   локальных (`landing_type=local`/`offer_type=local`) лендингов/офферов.
-- **Trial-режим лимиты** — не перенесены в `CampaignsController.php`
-  (`checkTrialCampaignLimit`-подобная проверка) и `StreamsController.php`
-  (`checkTrialStreamFilters`/`checkTrialStream`). Это НЕ осознанное
-  решение (в отличие от лицензирования вообще) — помечено как TODO в
-  коде, нужно решить: либо портировать реальные лимиты, либо явно
-  задокументировать как "триала в этой сборке больше нет" — решение за
-  пользователем, не додумывать самостоятельно.
-- **i18n/переводы** — не начато вообще. Затронутые места: `ResourceController.php`
+  **В работе сейчас.**
+- ~~Trial-режим лимиты~~ — не портировать в этом раунде
+  (`CampaignsController.php`/`StreamsController.php` TODO остаются как
+  есть). Пересмотреть только по явному запросу пользователя.
+- ~~i18n/переводы~~ — вынесено в отдельную задачу "на доработку, но
+  позже" (не в этом раунде вообще). Затронутые места остаются
+  задокументированы для той будущей задачи: `ResourceController.php`
   (translated string TODO), `GeoProfiles`' `decorated_countries` (только
-  английские названия), `SystemController` (язык). Нужна отдельная
-  оценка объёма прежде, чем браться — возможно, целая задача сама по
-  себе (переводы всех строк UI), не просто "починить 3 места".
+  английские названия), `SystemController` (язык). Объём — вероятно,
+  отдельная многосессионная задача (перевод всех строк UI).
 
 ---
 

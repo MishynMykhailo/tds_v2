@@ -521,8 +521,9 @@ class StreamsController extends Controller
      * its docblocks for every metric-SQL/meta.total/pagination deviation
      * from the real legacy `EntityGridFactory` found while reading it.
      *
-     * TODO: ACL not wired here yet (same TODO as
-     * CampaignsController::withStatsAction()).
+     * ACL is enforced inside EntityGridBuilder::applyAcl() (called from
+     * loadEntities()), fed by the `user:` param passed below — see
+     * tests/Feature/GridAclTest.php for live coverage.
      */
     public function withStatsAction(Request $request): array
     {
