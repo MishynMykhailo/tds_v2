@@ -1754,6 +1754,92 @@ Docker-проверка — единственный источник правд
 
 ---
 
+## ConversionCapacity — полноценная фича (не только PruneDailyCap) — 2026-09-03
+
+Пользователь поправил ошибочное решение в предыдущей записи: `PruneDailyCap`/
+`PruneUserBotDBCA` были названы "заблокированы инфрой" без реального
+разбора. Разобрался по каждому отдельно.
+
+**ConversionCapacity — реально построено, не заглушка.** Легаси-источник:
+`Component\Conversions\ConversionCapacity\{Service,Storage,Repository}\*`.
+Дневной кап конверсий на оффер + fallback-цепочка на
+`alternative_offer_id`, если кап достигнут. Схема
+(`offers.conversion_cap_enabled`/`daily_cap`/`conversion_timezone`/
+`alternative_offer_id`) существовала с первого дня проекта — рантайм-
+логики не было вообще.
+
+Построено:
+- `traffic-core/src/ConversionCapacity/ConversionCapacityService.php` —
+  Redis-хранилище (`daily_cap:<offer_id>` sorted sets), тот же паттерн,
+  что `HitLimitService`. `currentValueForOffer()` считает от полуночи
+  ПО ЧАСОВОМУ ПОЯСУ ОФФЕРА (`conversion_timezone`) — реальный
+  календарный день, НЕ rolling-окно (в отличие от `HitLimitService::
+  perDay()` — легаси реально использует разную семантику "дня" для
+  этих двух похожих фич, подтверждено чтением обоих storage-классов
+  напрямую). `FileStorage`-фоллбэк легаси не портирован — тот же
+  Redis-only прецедент, что уже установлен для каждого другого
+  per-entity счётчика в проекте.
+- `TrafficCore\Pipeline\ChooseOfferStage::resolveWithinCap()` —
+  fallback-цепочка (порт `findAvailableOffer()`), применяется
+  безусловно ПОСЛЕ выбора оффера, независимо от источника
+  (`forcedOfferId` или ротатор) — так же, как в реальном легаси-
+  исходнике (прочитан напрямую, не предположено).
+- `TrafficCore\Postback\PostbackProcessor::recordConversionCap()` —
+  запись (порт `UpdateConversionCapStage`), срабатывает только на
+  ДЕЙСТВИТЕЛЬНО новой конверсии.
+- `backend/`-дубликат: `App\Services\ConversionCapacityService`
+  (Laravel Redis facade, `traffic`-подключение) + хук в
+  `ConversionImportService` — легаси's `importArray()` реально гоняет
+  каждую строку через ТОТ ЖЕ `Pipeline`, что живые постбеки (включая
+  `UpdateConversionCapStage`), подтверждено ещё в записи про
+  `conversions.import` — значит и импорту нужен тот же побочный эффект.
+- `app:prune-daily-cap` — `ZREMRANGEBYSCORE`, 2-дневный TTL, БЕЗ
+  exception-списка (в отличие от `PruneHitLimits` — у daily-cap его в
+  легаси нет вообще, подтверждено чтением `RedisStorage::prune()`).
+
+**Реальный legacy null-pointer баг, найден и НЕ воспроизведён**:
+`Traffic\Pipeline\Stage\ChooseOfferStage::process()` делает
+`$newOffer->getId()` сразу после `findAvailableOffer($offer)` без
+null-проверки — а этот метод реально возвращает implicit `null` на
+ветке "кап достигнут, alternative_offer_id пуст" (нет `return` на этой
+ветке вообще). Тот же класс декомпиляционных багов, что уже
+каталогизирован в проекте (`docs/PORTING_LOG.md`'s более ранние
+записи). Порт обрабатывает это защищённо.
+
+**Живая проверка, end-to-end через Docker** (`tds2-mysql`/`tds2-redis` +
+поднятый traffic-core dev-сервер): campaign + stream (schema=offers) +
+2 оффера (капнутый `daily_cap=1`+`alternative_offer_id`, второй без
+капа) → первый клик отдал action_type капнутого оффера (404, cap ещё не
+достигнут) → реальный postback (`/postback.php?key=...&subid=...`)
+довёл Redis-счётчик до капа → второй клик РЕАЛЬНО упал на альтернативный
+оффер (200, другой action_type, подтверждено по `click_id`/`offer_id` в
+очереди) → `conversions.import` тоже записал в тот же
+`daily_cap:<id>` счётчик (напрямую вызван `ConversionImportService`,
+т.к. ACL-гейт контроллера требует полноценный HTTP-контекст) →
+`app:prune-daily-cap` вычистил ТОЛЬКО >2-дневную запись (4→3), недавние
+3 остались. Все фикстуры (campaign/stream/offers/clicks/conversions/
+Redis-ключи/settings) удалены после проверки.
+
+**`PruneUserBotDBCA`/`PruneLandingOfferCache` — подтверждено с
+пользователем напрямую, осознанно НЕ портируются (не "не смог", а
+согласованное решение).** Разбор `Component/BotDetection/*` +
+`Core/TdsDb/DBCA/*` (~570 строк): DBCA — кастомный бинарный
+IP-диапазон→код формат с hash-индексом (то же семейство, что бинарники
+IP2Location), компилируется из `user_bot_ips` для быстрого lookup БЕЗ
+SQL-скана на каждый клик. Функционально — тот же результат детекции,
+что уже даёт `check_bot_ip` (прямой SQL `min_ip <= ip2long($ip) <=
+max_ip`), разница чисто в МЕХАНИЗМЕ (компилированный бинарник vs
+прямой запрос с индексом), не в детектируемом результате.
+Пользователю задан прямой вопрос через AskUserQuestion — подтвердил,
+что прямого SQL достаточно, бинарный формат строить не нужно.
+`PruneLandingOfferCache` — файловый lp-offer кэш архитектурно не
+существует в этом проекте вообще.
+
+`backend/./vendor/bin/pest` — 402/402 (без нового автотеста на
+Redis-часть — тот же прецедент, что `PruneHitLimits`).
+
+---
+
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.
 Завершённая история (traffic-core Фазы 1-17) — в `docs/PORTING_LOG_ARCHIVE.md`,
 туда же архивировать записи старше ~2-3 недель/сессий, когда этот файл

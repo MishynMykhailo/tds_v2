@@ -169,6 +169,56 @@ domains) — итого ~26 задач, полный список с обосн�
 Pest-сьют специально изолирован на SQLite без внешних сервисов. Полный
 `./vendor/bin/pest` — 402/402.
 
+**Третья команда (`PruneDailyCap`) дозакрыта отдельным раундом
+(2026-09-03, по прямому запросу пользователя — "не забивать болт")**:
+пользователь поправил, что `PruneDailyCap`/`PruneUserBotDBCA` НЕ были
+блокированы, как я изначально предположил — надо было реально
+разобраться, а не списывать. Разбор показал: `ConversionCapacity` —
+полноценная, ранее НЕ построенная фича (дневной кап конверсий на
+оффер + fallback-цепочка на `alternative_offer_id`), а не просто
+cron-хвост. Схема (`offers.conversion_cap_enabled`/`daily_cap`/
+`conversion_timezone`/`alternative_offer_id`) была готова с самого
+начала проекта — просто никто не писал runtime-логику. Построено
+целиком: `TrafficCore\ConversionCapacity\ConversionCapacityService`
+(Redis, тот же паттерн, что `HitLimitService`) +
+`ChooseOfferStage::resolveWithinCap()` (fallback-цепочка на
+альтернативный оффер, с защитой от рекурсии) +
+`PostbackProcessor::recordConversionCap()` (запись при новой
+конверсии) + backend-дубликат (`App\Services\
+ConversionCapacityService` + хук в `ConversionImportService`, тот же
+прецедент дублирования между `backend/`/`traffic-core/`, что уже
+установлен для `ConversionImportService` самого по себе) +
+`app:prune-daily-cap` (2-дневный TTL, БЕЗ exception-списка — в отличие
+от hit-limits, у daily-cap его в легаси нет вообще).
+
+Живьём подтверждено end-to-end через Docker (campaign+stream+2 offer,
+один с `daily_cap=1`+`alternative_offer_id`): первый клик отдал
+action_type капнутого оффера (404), реальный postback довёл счётчик до
+капа, второй клик реально упал на alternative-оффер (200, другой
+action_type); `conversions.import` тоже записал в тот же Redis-счётчик;
+`app:prune-daily-cap` вычистил только >2-дневные записи. Все фикстуры
+удалены.
+
+**Найден и НЕ воспроизведён реальный legacy null-pointer баг**:
+`Traffic\Pipeline\Stage\ChooseOfferStage::process()` вызывает
+`$newOffer->getId()` сразу после `findAvailableOffer()` без null-чека
+— а этот метод реально возвращает implicit `null`, когда кап достигнут
+и `alternative_offer_id` пуст (нет explicit `return` на этой ветке) —
+тот же класс декомпиляционных багов, что уже каталогизирован в проекте.
+Порт обрабатывает это защищённо (null = "оффер недоступен", тот же
+путь, что уже есть для "оффер вообще не выбран").
+
+**`PruneUserBotDBCA`/`PruneLandingOfferCache` — подтверждено с
+пользователем напрямую, осознанно НЕ портируются**: разбор показал, что
+`DBCA` (`Core\TdsDb\DBCA\*`, ~570 строк) — это чисто перформанс-кэш
+(кастомный бинарный формат с hash-индексом поверх `user_bot_ips`),
+функционально ИДЕНТИЧНЫЙ уже реализованному `check_bot_ip` (прямой SQL
+range-запрос) — детекция бота одна и та же, разница только в механизме.
+Пользователь подтвердил: прямого SQL достаточно, бинарный формат
+строить не нужно. `PruneLandingOfferCache` — файловый lp-offer кэш
+архитектурно не существует в этом проекте вообще (traffic-core
+использует DB/Redis вместо файлового кэша).
+
 **ИСПРАВЛЕНИЕ (2026-09-03, стресс-проверка):** утверждение "no-op по
 умолчанию на чистой установке" выше — УСТАРЕЛО/НЕВЕРНО, написано до того
 как `SettingsSeeder` был добавлен в этой же сессии позже (см. запись
@@ -210,13 +260,12 @@ FK не даёт создать такую строку даже в фиксту
 - `WarmupCacheTask`/`FlushOldCacheTask`/`PruneMysqlSessions`/`CheckTsTask` —
   не применимы к этой архитектуре (легаси-кэш-namespace'ы, MySQL-сессии
   вместо Redis TTL, пустой no-op).
-- `PruneDailyCap` — реально зависит от непортированного
-  ConversionCapacity-модуля (дневные капы на конверсии), которого в
-  проекте физически нет — не низкий приоритет, а архитектурная задача.
-- `PruneUserBotDBCA` — реально зависит от DBCA bot-signature бинарников
-  (`UserBotDBCARepository`), которых в проекте физически нет — бот
--детекция в этом порте использует хардкод-список + кастомные сигнатуры
-  (`BotDetectionService`), не DBCA-файлы.
+- `PruneUserBotDBCA` — подтверждено с пользователем напрямую: DBCA
+  bot-signature бинарники (`Core\TdsDb\DBCA\*`, кастомный формат с
+  hash-индексом) — чисто перформанс-кэш поверх `user_bot_ips`,
+  функционально идентичный уже реализованному `check_bot_ip` (прямой
+  SQL range-запрос, тот же результат детекции). Строить бинарный формат
+  осознанно решено не нужно.
 - `PruneLandingOfferCache` — файловый lp-offer кэш-слой не существует в
   архитектуре этого проекта вообще (traffic-core использует
   DB/Redis-подходы вместо файлового кэша) — структурно нечего чистить,
@@ -227,7 +276,9 @@ FK не даёт создать такую строку даже в фиксту
 - `pruneReferences()` (ref_*-словари) — зависит от непортированного
   `ClicksDefinition::getRelations()` (см. `ConversionsController::
   updateCostDefinitionAction`'s докблок, та же причина).
-- `PruneStreamEvents`/`PruneHitLimits` — **ЗАКРЫТО**, см. выше.
+- `PruneStreamEvents`/`PruneHitLimits`/`PruneDailyCap` — **ЗАКРЫТО**, см.
+  выше (`PruneDailyCap` потребовал построить целый ConversionCapacity-
+  модуль, не только сам cron-таск).
 
 ---
 
