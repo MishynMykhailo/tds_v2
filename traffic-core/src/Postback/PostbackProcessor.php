@@ -133,6 +133,8 @@ class PostbackProcessor
                 'params' => $paramsJson,
                 'sale_datetime' => $saleDatetime,
             ]);
+
+            $this->recordConversionCap($click['offer_id'] ?? null, $nowUtc);
         } else {
             $conversionId = (int) $existing['conversion_id'];
             $this->conversions->update($conversionId, [
@@ -196,5 +198,38 @@ class PostbackProcessor
             'sale_revenue' => $status === 'sale' ? $revenue : 0,
             'rejected_revenue' => $status === 'rejected' ? $revenue : 0,
         ]);
+    }
+
+    /**
+     * Port of legacy `UpdateConversionCapStage::process()`
+     * (application/Component/Postback/ProcessPostback/Stages/
+     * UpdateConversionCap.php) — records this NEW conversion (never on a
+     * status-update to an existing one, matching legacy's
+     * `getNewConversion()` guard) against the offer's daily-cap Redis
+     * counter, but only when the offer has `conversion_cap_enabled` set.
+     * Added 2026-09-03 alongside `TrafficCore\Pipeline\ChooseOfferStage`'s
+     * matching cap-check/alternative-offer-chain half (see that class's
+     * docblock) - the two only make sense together.
+     */
+    private function recordConversionCap(?int $offerId, string $postbackDatetimeUtc): void
+    {
+        if ($offerId === null) {
+            return;
+        }
+
+        $stmt = \TrafficCore\Db::instance()->prepare('SELECT conversion_cap_enabled FROM offers WHERE id = ? LIMIT 1');
+        $stmt->execute([$offerId]);
+        $offer = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        if ($offer === false || empty($offer['conversion_cap_enabled'])) {
+            return;
+        }
+
+        $timestamp = \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $postbackDatetimeUtc, new \DateTimeZone('UTC'));
+
+        (new \TrafficCore\ConversionCapacity\ConversionCapacityService())->store(
+            $offerId,
+            $timestamp !== false ? $timestamp->getTimestamp() : time(),
+        );
     }
 }

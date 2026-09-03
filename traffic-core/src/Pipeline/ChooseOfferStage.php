@@ -2,6 +2,7 @@
 
 namespace TrafficCore\Pipeline;
 
+use TrafficCore\ConversionCapacity\ConversionCapacityService;
 use TrafficCore\Db;
 use TrafficCore\Uniqueness\EntityBindingService;
 
@@ -45,11 +46,33 @@ use TrafficCore\Uniqueness\EntityBindingService;
  * landing was already shown, now report/confirm which offer" (`landingId`
  * being non-null is exactly the normal case there, not the exception).
  *
- * NOT ported: the `IGNORE_OFFER_PARAM="exit"` param-skip,
- * `ConversionCapacityService::findAvailableOffer()` (daily-cap
- * alternate-offer chain — `offers.conversion_cap_enabled`/`daily_cap`
- * columns exist in `backend/` but no runtime check reads them yet),
- * `needToken` itself (no token flow to need one for).
+ * NOT ported: the `IGNORE_OFFER_PARAM="exit"` param-skip, `needToken`
+ * itself (no token flow to need one for).
+ *
+ * Phase 18 (2026-09-03, "добей хвосты" round): `ConversionCapacityService::
+ * findAvailableOffer()` (daily-cap alternate-offer chain) IS now ported —
+ * `resolveWithinCap()` below, applied to whichever offer either branch
+ * resolves, exactly where legacy applies it (unconditionally, AFTER offer
+ * resolution, before setting the action fields — see the real
+ * `Traffic\Pipeline\Stage\ChooseOfferStage::process()`, read directly, not
+ * assumed). `ConversionCapacityService` itself (`store()`/
+ * `currentValueForOffer()`) lives in `src/ConversionCapacity/` — see its
+ * own docblock for the Redis mechanism and why legacy's `FileStorage`
+ * fallback isn't ported.
+ *
+ * REAL LEGACY BUG, found reading the source directly, NOT reproduced:
+ * `ChooseOfferStage::process()` does
+ * `if ($newOffer->getId() != $offer->getId())` right after calling
+ * `findAvailableOffer($offer)` — but that method has no final `return`
+ * statement on its "cap reached, no alternative_offer_id set" branch, so
+ * it implicitly returns PHP `null`. Calling `->getId()` on that null
+ * would be an uncaught fatal ("Call to a member function getId() on
+ * null") in real legacy whenever a capped offer has no alternative
+ * chain - same decompilation-bug shape as several other findings this
+ * project has already catalogued (docs/PORTING_LOG.md). Ported
+ * defensively instead: a null result here just means "no offer
+ * available", same as the existing `if (empty($offer))` skip case a few
+ * lines below already handles for the no-offer-at-all path.
  */
 class ChooseOfferStage
 {
@@ -69,16 +92,7 @@ class ChooseOfferStage
             $stmt->execute([$forcedOfferId]);
             $offer = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
 
-            if ($offer === null) {
-                return $payload;
-            }
-
-            $payload->offerId = (int) $offer['id'];
-            $payload->actionType = $offer['action_type'];
-            $payload->actionPayload = $offer['action_payload'];
-            $payload->actionOptions = $offer['action_options'] ?? null;
-
-            return $payload;
+            return $this->applyOffer($payload, $offer);
         }
 
         if ($payload->landingId !== null) {
@@ -103,6 +117,19 @@ class ChooseOfferStage
             EntityBindingService::TYPE_OFFER,
         );
 
+        return $this->applyOffer($payload, $offer);
+    }
+
+    /** @param array<string,mixed>|null $offer */
+    private function applyOffer(Payload $payload, ?array $offer): Payload
+    {
+        if ($offer === null) {
+            return $payload;
+        }
+
+        $timestamp = $payload->signal['datetime']?->getTimestamp() ?? time();
+        $offer = $this->resolveWithinCap($offer, $timestamp);
+
         if ($offer === null) {
             return $payload;
         }
@@ -117,5 +144,55 @@ class ChooseOfferStage
         $payload->actionOptions = $offer['action_options'] ?? null;
 
         return $payload;
+    }
+
+    /**
+     * Port of `ConversionCapacityService::findAvailableOffer()`. Follows
+     * `alternative_offer_id` while the current offer's daily cap is
+     * reached, same recursion-guard as legacy's `RecursionError` (a
+     * chain that revisits an offer id just stops here instead of
+     * throwing — see class docblock on why a hard error isn't
+     * reproduced).
+     *
+     * @param  array<string,mixed>  $offer
+     * @param  array<int,int>  $previousChecks
+     * @return array<string,mixed>|null
+     */
+    private function resolveWithinCap(array $offer, int $timestamp, array $previousChecks = []): ?array
+    {
+        if (empty($offer['conversion_cap_enabled'])) {
+            return $offer;
+        }
+
+        if (in_array((int) $offer['id'], $previousChecks, true)) {
+            return null;
+        }
+
+        $service = new ConversionCapacityService();
+        $currentValue = $service->currentValueForOffer(
+            (int) $offer['id'],
+            (string) ($offer['conversion_timezone'] ?? 'UTC'),
+            $timestamp,
+        );
+
+        if ((int) $offer['daily_cap'] > $currentValue) {
+            return $offer;
+        }
+
+        if (empty($offer['alternative_offer_id'])) {
+            return null;
+        }
+
+        $stmt = Db::instance()->prepare("SELECT * FROM offers WHERE id = ? AND state = 'active' LIMIT 1");
+        $stmt->execute([$offer['alternative_offer_id']]);
+        $alternative = $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
+
+        if ($alternative === null) {
+            return null;
+        }
+
+        $previousChecks[] = (int) $offer['id'];
+
+        return $this->resolveWithinCap($alternative, $timestamp, $previousChecks);
     }
 }

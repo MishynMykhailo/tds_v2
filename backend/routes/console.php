@@ -43,6 +43,19 @@ Artisan::command('inspire', function () {
 // actually was (their underlying tables/mechanisms were already real).
 // Both are also GENERAL_TYPE prune tasks in legacy's own PruneData
 // (1440 min = 24h) - `->daily()`, same as every other command here.
+//
+// Same round, second pass (user asked to actually build the
+// ConversionCapacity module rather than skip it): `PruneDailyCap`
+// (daily_cap:<offer_id> Redis sets, 2-day legacy TTL) - the offer
+// daily-cap feature itself is now real (see
+// TrafficCore\Pipeline\ChooseOfferStage / App\Services\
+// ConversionCapacityService docblocks), not just this prune command.
+// PruneUserBotDBCA/PruneLandingOfferCache remain deliberately NOT
+// ported - confirmed with the user directly that DBCA's binary
+// IP-range cache format is a pure performance optimization with no
+// behavioral difference from the already-real `check_bot_ip` SQL
+// check, and the file-based lp-offer cache architecture doesn't exist
+// in this project at all.
 // ---------------------------------------------------------------
 
 Schedule::command('app:prune-archived-entities')->daily();
@@ -51,3 +64,4 @@ Schedule::command('app:prune-expired-password-hashes')->daily();
 Schedule::command('app:prune-orphaned-data')->daily()->at('03:30');
 Schedule::command('app:prune-stream-events')->daily();
 Schedule::command('app:prune-hit-limits')->daily();
+Schedule::command('app:prune-daily-cap')->daily();

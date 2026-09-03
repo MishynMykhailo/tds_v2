@@ -191,6 +191,8 @@ class ConversionImportService
                 'params' => json_encode($entry, JSON_PARTIAL_OUTPUT_ON_ERROR) ?: '{}',
                 'sale_datetime' => $saleDatetime,
             ]);
+
+            $this->recordConversionCap($click->offer_id, $nowUtc);
         } else {
             $existing->update([
                 'tid' => $entry['tid'] ?? $existing->tid,
@@ -243,5 +245,34 @@ class ConversionImportService
         }
 
         return $matched;
+    }
+
+    /**
+     * Port of legacy's `UpdateConversionCapStage` half of
+     * `ConversionsService::importArray()`'s pipeline - see
+     * `App\Services\ConversionCapacityService`'s own docblock for why
+     * this port's manual import needs it too. Only fires on a genuinely
+     * NEW conversion row (the caller only invokes this from the
+     * `$existing === null` branch), matching legacy's `getNewConversion()`
+     * guard.
+     */
+    private function recordConversionCap(?int $offerId, string $postbackDatetimeUtc): void
+    {
+        if ($offerId === null) {
+            return;
+        }
+
+        $offer = \App\Models\Offer::find($offerId);
+
+        if ($offer === null || ! $offer->conversion_cap_enabled) {
+            return;
+        }
+
+        $timestamp = \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $postbackDatetimeUtc, new \DateTimeZone('UTC'));
+
+        (new ConversionCapacityService())->store(
+            $offerId,
+            $timestamp !== false ? $timestamp->getTimestamp() : time(),
+        );
     }
 }
