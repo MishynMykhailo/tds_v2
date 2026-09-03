@@ -46,6 +46,7 @@ class OffersController extends Controller
         private readonly AclService $aclService,
         private readonly CurrentUserService $currentUserService,
         private readonly LocalFileService $localFileService,
+        private readonly \App\Services\PreviewUrlBuilder $previewUrlBuilder,
     ) {}
 
     /**
@@ -258,12 +259,14 @@ class OffersController extends Controller
             $data['affiliate_network_id'] = 0;
         }
 
-        // OfferSerializer::extra(): local_file offers get a `preview` field
-        // (OfferService::addPreviewData()) — TODO: LocalFile/PreviewImage
-        // modules (ZIP upload, preview generation) not ported yet, left as
-        // an explicit null stub per task instructions.
-        if (($data['action_type'] ?? null) === 'local_file') {
-            $data['preview'] = null;
+        // OfferSerializer::extra(): local_file offers get a `preview`
+        // field. Port of `ActionableResourceTrait::addPreviewData()` — see
+        // `LandingsController::serializeLanding()`'s matching comment for
+        // the full rationale (same convention, same
+        // `GenerateLocalFilePreviewJob`).
+        $folder = is_array($data['action_options'] ?? null) ? ($data['action_options']['folder'] ?? null) : null;
+        if (($data['action_type'] ?? null) === 'local_file' && ! empty($folder)) {
+            $data['preview'] = rtrim($folder, '/').'/'.\App\Services\PreviewImageService::PREVIEW_FILE;
         }
 
         // OfferSerializer::extra(): conversion_cap_enabled offers get a
@@ -322,6 +325,36 @@ class OffersController extends Controller
         $withGroupName = $this->boolParam($this->param($request, 'withGroupName'));
 
         return response()->json($this->serializeOffer($offer, $withGroupName));
+    }
+
+    /**
+     * New action — see `LandingsController::previewAction()`'s docblock
+     * for the full rationale/token scheme (identical mechanism, this is
+     * the offers side of the same never-built legacy idea).
+     */
+    public function previewAction(Request $request): Response
+    {
+        $id = $this->param($request, 'id');
+
+        if (empty($id)) {
+            return $this->notFound('Offer not found');
+        }
+
+        $offer = Offer::find((int) $id);
+
+        if (! $offer) {
+            return $this->notFound('Offer not found');
+        }
+
+        if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $offer)) {
+            return $this->forbidden('You are not allowed to preview this offer');
+        }
+
+        if ($offer->action_type !== 'local_file') {
+            return $this->validationError(['action_type' => ['Only local_file offers can be previewed']]);
+        }
+
+        return response()->json(['url' => $this->previewUrlBuilder->build('offer', $offer->id)]);
     }
 
     public function createAction(Request $request): Response

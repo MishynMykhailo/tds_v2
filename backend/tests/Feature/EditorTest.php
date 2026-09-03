@@ -113,6 +113,45 @@ it('saves file data for a local landing', function () {
     expect($content)->toBe('<html>updated</html>');
 });
 
+it('saveFileData queues a preview-image regeneration job (port of legacy CreatePreviewImageCommand::enqueue)', function () {
+    \Illuminate\Support\Facades\Queue::fake();
+    $landing = makeLocalLandingWithFiles();
+
+    $this->postJson(editorEndpoint('saveFileData'), [
+        'id' => $landing->id, 'type' => 'landing', 'path' => 'index.html', 'data' => 'x',
+    ])->assertStatus(200);
+
+    \Illuminate\Support\Facades\Queue::assertPushed(
+        \App\Jobs\GenerateLocalFilePreviewJob::class,
+        fn ($job) => $job->type === 'landing' && $job->id === $landing->id,
+    );
+});
+
+it('removeFile queues a preview-image regeneration job', function () {
+    \Illuminate\Support\Facades\Queue::fake();
+    $landing = makeLocalLandingWithFiles(['index.html' => '<html></html>', 'old.txt' => 'x']);
+
+    $this->postJson(editorEndpoint('removeFile'), [
+        'id' => $landing->id, 'type' => 'landing', 'path' => 'old.txt',
+    ])->assertStatus(200);
+
+    \Illuminate\Support\Facades\Queue::assertPushed(
+        \App\Jobs\GenerateLocalFilePreviewJob::class,
+        fn ($job) => $job->type === 'landing' && $job->id === $landing->id,
+    );
+});
+
+it('createFile does NOT queue a preview-image regeneration job (legacy only enqueues on save/remove)', function () {
+    \Illuminate\Support\Facades\Queue::fake();
+    $landing = makeLocalLandingWithFiles();
+
+    $this->postJson(editorEndpoint('createFile'), [
+        'id' => $landing->id, 'type' => 'landing', 'path' => 'script.js',
+    ])->assertStatus(200);
+
+    \Illuminate\Support\Facades\Queue::assertNotPushed(\App\Jobs\GenerateLocalFilePreviewJob::class);
+});
+
 it('creates a new file with an allowed extension', function () {
     $landing = makeLocalLandingWithFiles();
 

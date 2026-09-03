@@ -82,5 +82,31 @@ services:
     command: ["php-fpm", "-F", "-y", "/usr/local/etc/php-fpm.d/www.conf"]
     restart: unless-stopped
 
+  # Headless-Chrome screenshot service for the landing/offer preview-image
+  # feature (backend/app/Services/PreviewImageService.php). Legacy's own
+  # `PreviewImageService::createPreview()` was already a disabled no-op
+  # (external `screenshot.tds24.ru` vendor service, intentionally turned
+  # off — see the legacy source's own docblock) with a documented "own
+  # local headless-browser implementation is planned" TODO never acted
+  # on — this is that implementation, built fresh (no legacy behavior to
+  # port, since legacy never actually had one running).
+  #
+  # `chromedp/headless-shell` (official, from the well-known chromedp Go
+  # project) already listens on 9222 by default via its own entrypoint —
+  # the ONLY flag added here is `--remote-allow-origins=*`, required
+  # because Chrome's own CDP handshake otherwise rejects a WebSocket
+  # connection whose Origin header doesn't match its own host (confirmed
+  # live: a 403 "Rejected an incoming WebSocket connection" without it).
+  # Same opt-in pattern as `traffic-core-worker`/`traffic-core-php-fpm`:
+  # `docker compose --profile screenshot up`.
+  screenshot:
+    image: chromedp/headless-shell:latest
+    container_name: tds2-screenshot
+    profiles: ["screenshot"]
+    ports:
+      - "9222:9222"
+    command: ["--remote-allow-origins=*"]
+    restart: unless-stopped
+
 volumes:
   tds2_mysql_data:

@@ -46,6 +46,7 @@ class LandingsController extends Controller
         private readonly AclService $aclService,
         private readonly CurrentUserService $currentUserService,
         private readonly LocalFileService $localFileService,
+        private readonly \App\Services\PreviewUrlBuilder $previewUrlBuilder,
     ) {}
 
     /**
@@ -237,11 +238,18 @@ class LandingsController extends Controller
         }
 
         // LandingSerializer::extra(): local_file landings get a `preview`
-        // field (LandingService::addPreviewData()) — TODO: LocalFile/
-        // PreviewImage modules (ZIP upload, preview generation) not ported
-        // yet, left as an explicit null stub per task instructions.
-        if (($data['action_type'] ?? null) === 'local_file') {
-            $data['preview'] = null;
+        // field. Port of `ActionableResourceTrait::addPreviewData()` —
+        // literal legacy behavior: the relative path is ALWAYS set once a
+        // folder exists, regardless of whether `_preview.png` has
+        // actually been generated yet (`App\Jobs\
+        // GenerateLocalFilePreviewJob`, queued from
+        // `EditorController::saveFileDataAction()`/`removeFileAction()` —
+        // see that job's docblock). Not a broken link: a landing/offer
+        // whose file was never edited after this feature shipped simply
+        // has no image at that path yet.
+        $folder = is_array($data['action_options'] ?? null) ? ($data['action_options']['folder'] ?? null) : null;
+        if (($data['action_type'] ?? null) === 'local_file' && ! empty($folder)) {
+            $data['preview'] = rtrim($folder, '/').'/'.\App\Services\PreviewImageService::PREVIEW_FILE;
         }
 
         foreach (['created_at', 'updated_at'] as $key) {
@@ -291,6 +299,48 @@ class LandingsController extends Controller
         }
 
         return response()->json($this->serializeLanding($landing));
+    }
+
+    /**
+     * New action (no direct legacy equivalent that was ever actually
+     * built — see `docs/default/TODO_IMPROVEMENTS.md` in the legacy
+     * source, "[НЕ СДЕЛАНО] Превью оффера/лендинга прямо из админки":
+     * documented as an idea, never implemented there). Mints a short-
+     * lived HMAC-signed link to `traffic-core/public/preview.php`,
+     * which renders this landing's `local_file` content directly (no
+     * campaign/stream resolution) — see that file's docblock for the
+     * token scheme and why the two projects can't share code directly.
+     *
+     * Admin-gated the same way `showAction()` is (`isViewAllowed()`) —
+     * the frontend "Preview" eye-icon button should call this to get a
+     * URL to open in a new tab, not use `local_path` directly (that
+     * field still doesn't exist on this model/serializer — see
+     * `serializeLanding()`'s `preview` field for the SEPARATE screenshot-
+     * thumbnail feature, not this one).
+     */
+    public function previewAction(Request $request): Response
+    {
+        $id = $this->param($request, 'id');
+
+        if (empty($id)) {
+            return $this->notFound('Landing not found');
+        }
+
+        $landing = Landing::find((int) $id);
+
+        if (! $landing) {
+            return $this->notFound('Landing not found');
+        }
+
+        if (! $this->aclService->isViewAllowed($this->currentUserService->get(), $landing)) {
+            return $this->forbidden('You are not allowed to preview this landing');
+        }
+
+        if ($landing->action_type !== 'local_file') {
+            return $this->validationError(['action_type' => ['Only local_file landings can be previewed']]);
+        }
+
+        return response()->json(['url' => $this->previewUrlBuilder->build('landing', $landing->id)]);
     }
 
     public function createAction(Request $request): Response

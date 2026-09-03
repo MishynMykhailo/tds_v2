@@ -35,4 +35,31 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | traffic-core (separate Composer project, see docs/ARCHITECTURE_PLAN.md)
+    |--------------------------------------------------------------------------
+    |
+    | Used by LandingsController::previewAction()/OffersController::
+    | previewAction() to mint the HMAC-signed preview link traffic-core's
+    | public/preview.php validates — see that file's docblock. `secret`
+    | MUST match traffic-core's PREVIEW_SECRET env var exactly.
+    */
+    'traffic_core' => [
+        'url' => env('TRAFFIC_CORE_URL', 'http://localhost:8080'),
+        'preview_secret' => env('PREVIEW_SECRET', 'tds_v2-dev-only-preview-secret-override-via-PREVIEW_SECRET-env'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Headless-Chrome screenshot service (deploy/docker-compose.yml `screenshot`)
+    |--------------------------------------------------------------------------
+    |
+    | Used by App\Services\PreviewImageService to render landing/offer
+    | preview thumbnails — see that class's docblock.
+    */
+    'screenshot' => [
+        'cdp_url' => env('SCREENSHOT_CDP_URL', 'http://localhost:9222'),
+    ],
+
 ];

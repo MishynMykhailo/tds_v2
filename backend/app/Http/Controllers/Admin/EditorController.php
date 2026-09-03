@@ -39,8 +39,10 @@ use Symfony\Component\HttpFoundation\Response;
  * - `infoLandingAction` is NOT ported — trivial re-serialization of an
  *   already-existing landing/offer, not core Editor behavior, skipped to
  *   keep this round scoped to the actual file-manager surface.
- * - `CreatePreviewImageCommand::enqueue(...)` after save/remove is NOT
- *   called — `PreviewImageService` isn't ported (see docs/PORTING_LOG.md).
+ * - `CreatePreviewImageCommand::enqueue(...)` after save/remove IS now
+ *   called (`App\Jobs\GenerateLocalFilePreviewJob`) — see that job's
+ *   docblock for how rendering works now that `PreviewImageService` is
+ *   real (`App\Services\PreviewImageService`, headless-Chrome based).
  */
 class EditorController extends Controller
 {
@@ -228,7 +230,7 @@ class EditorController extends Controller
         if ($resolved instanceof Response) {
             return $resolved;
         }
-        [, $folder] = $resolved;
+        [$model, $folder] = $resolved;
 
         try {
             $path = $this->localFileService->resolveSafePath($folder, (string) $this->param($request, 'path'));
@@ -240,6 +242,8 @@ class EditorController extends Controller
             mkdir(dirname($path), 0755, true);
         }
         file_put_contents($path, (string) $this->param($request, 'data'));
+
+        $this->queuePreviewRegeneration($model);
 
         return response()->json(['path' => $path]);
     }
@@ -283,7 +287,7 @@ class EditorController extends Controller
         if ($resolved instanceof Response) {
             return $resolved;
         }
-        [, $folder] = $resolved;
+        [$model, $folder] = $resolved;
 
         try {
             $path = $this->localFileService->resolveSafePath($folder, (string) $this->param($request, 'path'));
@@ -299,6 +303,22 @@ class EditorController extends Controller
             return response()->json(['success' => false]);
         }
 
+        $this->queuePreviewRegeneration($model);
+
         return response()->json(['success' => true]);
+    }
+
+    /**
+     * Port of legacy `CreatePreviewImageCommand::enqueue($domain,
+     * $systemPath)`'s call sites (`saveFileDataAction`/`removeFileAction`
+     * only — legacy does NOT call it from `createFileAction`, confirmed
+     * by reading the real source, not assumed for symmetry).
+     */
+    private function queuePreviewRegeneration(Landing|Offer $model): void
+    {
+        \App\Jobs\GenerateLocalFilePreviewJob::dispatch(
+            $model instanceof Landing ? self::MODEL_LANDING : self::MODEL_OFFER,
+            $model->id,
+        );
     }
 }

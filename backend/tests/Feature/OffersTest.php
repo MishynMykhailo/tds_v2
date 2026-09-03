@@ -171,6 +171,39 @@ it('lists offers as options', function () {
     }
 });
 
+it('show: local_file offer gets a preview field ({folder}/_preview.png), regardless of whether the file exists yet', function () {
+    $offer = OfferFactory::new()->create(['action_type' => 'local_file', 'action_options' => json_encode(['folder' => 'my-offer-folder'])]);
+
+    $response = $this->getJson(offersEndpoint('show', ['id' => $offer->id]));
+
+    $response->assertStatus(200);
+    expect($response->json('preview'))->toBe('my-offer-folder/'.\App\Services\PreviewImageService::PREVIEW_FILE);
+});
+
+it('preview: returns a signed traffic-core preview URL for a local_file offer', function () {
+    $offer = OfferFactory::new()->create(['action_type' => 'local_file', 'action_options' => json_encode(['folder' => 'x'])]);
+
+    $response = $this->getJson(offersEndpoint('preview', ['id' => $offer->id]));
+
+    $response->assertStatus(200);
+    $url = $response->json('url');
+    expect($url)->toContain('/preview.php?');
+    expect($url)->toContain('type=offer');
+    expect($url)->toContain('id='.$offer->id);
+
+    parse_str(parse_url($url, PHP_URL_QUERY), $query);
+    $expected = hash_hmac('sha256', "offer:{$offer->id}:{$query['expires']}", config('services.traffic_core.preview_secret'));
+    expect($query['token'])->toBe($expected);
+});
+
+it('preview: rejects a non-local_file offer with a validation error', function () {
+    $offer = OfferFactory::new()->create(['action_type' => 'http']);
+
+    $response = $this->getJson(offersEndpoint('preview', ['id' => $offer->id]));
+
+    $response->assertStatus(406);
+});
+
 it('denies a guest (no current user) access to view an offer with a 403', function () {
     $offer = OfferFactory::new()->create();
     actingAsAdminForOffers(null);

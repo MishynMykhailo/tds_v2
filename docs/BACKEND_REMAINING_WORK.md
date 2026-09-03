@@ -242,12 +242,50 @@ preview. Trial-режим не портировать вообще (не осо�
 "навсегда", а просто не в скоупе сейчас). i18n — вынесено в отдельную
 задачу "на доработку", начинать не раньше отдельного запроса.**
 
-- **Preview-изображения лендингов/офферов** (`PreviewImageService` в
-  легаси) — явно застаблены `null` в `LandingsController.php`/
-  `OffersController.php` (`landing->isLocal()`/`offer->isLocal()`
-  preview generation). Нужен реальный генератор скриншота/превью для
-  локальных (`landing_type=local`/`offer_type=local`) лендингов/офферов.
-  **В работе сейчас.**
+- **Preview-изображения лендингов/офферов — ЗАКРЫТО (2026-09-03), обе
+  половины.** Уточнение у пользователя (`AskUserQuestion`) вскрыло, что
+  "preview" в легаси-доке (`docs/default/TODO_IMPROVEMENTS.md`) — это
+  ДВЕ разные, никогда не реализованные в легаси фичи, обе сделаны:
+
+  1. **Кнопка Preview в админке** (открыть local_file лендинг/оффер
+     напрямую в браузере, в обход подбора кампании/стрима). В легаси
+     это была только ИДЕЯ (`docs/default/TODO_IMPROVEMENTS.md`,
+     "[НЕ СДЕЛАНО] Превью оффера/лендинга прямо из админки"), никогда не
+     реализованная. Новый `traffic-core/public/preview.php` (новый
+     entry point, переиспользует существующий `TrafficCore\Pipeline\
+     Actions\LocalFile`-хендлер без изменений) + `previewAction()` в
+     `LandingsController`/`OffersController` (backend), связаны
+     HMAC-подписанной короткоживущей ссылкой (`App\Services\
+     PreviewUrlBuilder`, новый env `PREVIEW_SECRET`/`TRAFFIC_CORE_URL` —
+     тот же принцип, что `JWT_SALT`, т.к. `backend/`/`traffic-core/` —
+     раздельные Composer-проекты без общего кода).
+  2. **Скриншот-превью для карточек в гриде** (`_preview.png`). В самом
+     легаси `PreviewImageService::createPreview()` уже был отключённым
+     no-op (внешний `screenshot.tds24.ru` намеренно выключен, с
+     докблоком "own local headless-browser implementation is planned") —
+     переносить было нечего, реализовано с нуля: `chromedp/headless-
+     shell` (новый Docker-сервис `deploy/docker-compose.yml`, профиль
+     `screenshot`) + `chrome-php/chrome` composer-пакет (5.7M+ скачиваний,
+     MIT, проверен на репутацию перед установкой — чисто) в
+     `App\Services\PreviewImageService`. Скриншотит ТОТ ЖЕ URL, что
+     кнопка Preview выше — один путь рендеринга на обе фичи.
+     `App\Jobs\GenerateLocalFilePreviewJob` — порт легаси
+     `CreatePreviewImageCommand::enqueue()`, диспатчится из
+     `EditorController::saveFileDataAction()`/`removeFileAction()` (те
+     же две точки, что в легаси, `createFileAction` НЕ диспатчит — тоже
+     как в легаси). `preview` поле в сериализаторах — порт
+     `ActionableResourceTrait::addPreviewData()` (`{folder}/_preview.png`,
+     всегда, вне зависимости от того, сгенерирован ли файл фактически —
+     буквальное легаси-поведение).
+
+  Живая проверка (Docker, headless-shell + traffic-core `php -S` +
+  реальный MySQL): полный pipeline — save-триггер → job → сигнатура URL →
+  `preview.php` рендерит local_file → headless Chrome реально
+  скриншотит → валидный PNG 800×600 сохранён по правильному пути.
+  Фикстуры удалены. Тесты: 6 новых (`EditorTest`/`LandingsTest`/
+  `OffersTest`) + уже существующие `previewAction`-тесты. Полный
+  `./vendor/bin/pest` — 384/384, `php -l` чисто на всех изменённых/новых
+  файлах (включая `traffic-core/public/preview.php`).
 - ~~Trial-режим лимиты~~ — не портировать в этом раунде
   (`CampaignsController.php`/`StreamsController.php` TODO остаются как
   есть). Пересмотреть только по явному запросу пользователя.

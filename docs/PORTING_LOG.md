@@ -1620,4 +1620,44 @@ artisan tinker`, фикстуры удалены. Полный `./vendor/bin/pes
 373/373, `php -l` чисто.
 
 ---
+
+## Preview-изображения (backlog 4) — 2026-09-03
+
+Уточнение у пользователя вскрыло: легаси-док `docs/default/
+TODO_IMPROVEMENTS.md` описывает ДВЕ разные "preview"-идеи, ни одна не
+была реализована в легаси. Сделаны обе — детали и живая проверка в
+`docs/BACKEND_REMAINING_WORK.md` раздел 4. Кратко по новым файлам:
+
+- `traffic-core/public/preview.php` — новый entry point, HMAC-токен
+  (`type:id:expires`, `PREVIEW_SECRET` env, тот же принцип что
+  `JWT_SALT`), рендерит local_file напрямую через уже существующий
+  `TrafficCore\Pipeline\Actions\LocalFile` (ноль изменений в этом
+  хендлере — просто вызван с минимальным `Payload`).
+- `backend/app/Services/PreviewUrlBuilder.php` — общий HMAC-URL builder
+  (раньше было 2 копии одного и того же в Landings/OffersController,
+  вынесено в одно место).
+- `backend/app/Services/PreviewImageService.php` — headless-Chrome
+  скриншот через `chrome-php/chrome` (проверен на репутацию перед
+  установкой: 5.7M+ downloads, MIT, Graham Campbell — чисто) + новый
+  Docker-сервис `deploy/docker-compose.yml` `screenshot`
+  (`chromedp/headless-shell`, профиль `screenshot`, флаг
+  `--remote-allow-origins=*` обязателен — иначе CDP WebSocket
+  handshake падает с 403, подтверждено живьём).
+- `backend/app/Jobs/GenerateLocalFilePreviewJob.php` — порт
+  `CreatePreviewImageCommand::enqueue()`. **Реальный баг, найденный и
+  исправленный при живом тесте**: если просто дать
+  `PreviewImageService::capture()` бросать исключение наружу, это ломает
+  вызывающий HTTP-запрос с 500 при `QUEUE_CONNECTION=sync` (тестовое
+  окружение) — джоб выполняется синхронно прямо в том же запросе.
+  Исправлено try/catch внутри `handle()` (лог + молчаливый пропуск) —
+  сохранение/удаление файла в редакторе никогда не должно падать
+  из-за недоступного скриншот-сервиса.
+
+Verification: полный живой pipeline (headless-shell + traffic-core
+`php -S` + реальный MySQL в Docker) — save → job → подписанный URL →
+`preview.php` → headless Chrome → валидный PNG 800×600 на диске.
+Фикстуры удалены. 6 новых Pest-тестов, полный `./vendor/bin/pest` —
+384/384, `php -l` чисто.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

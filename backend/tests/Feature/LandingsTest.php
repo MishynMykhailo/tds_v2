@@ -194,6 +194,58 @@ it('listAsOptions resolves the real group name for landings', function () {
     expect($byId[$landing->id]['group'])->toBe('Landing List Group');
 });
 
+it('show: local_file landing gets a preview field ({folder}/_preview.png), regardless of whether the file exists yet', function () {
+    $landing = LandingFactory::new()->create(['action_type' => 'local_file', 'action_options' => json_encode(['folder' => 'my-folder'])]);
+
+    $response = $this->getJson(landingsEndpoint('show', ['id' => $landing->id]));
+
+    $response->assertStatus(200);
+    expect($response->json('preview'))->toBe('my-folder/'.\App\Services\PreviewImageService::PREVIEW_FILE);
+});
+
+it('show: a non-local_file landing has no preview field', function () {
+    $landing = LandingFactory::new()->create(['action_type' => 'http']);
+
+    $response = $this->getJson(landingsEndpoint('show', ['id' => $landing->id]));
+
+    $response->assertStatus(200);
+    expect($response->json())->not->toHaveKey('preview');
+});
+
+it('preview: returns a signed traffic-core preview URL for a local_file landing', function () {
+    $landing = LandingFactory::new()->create(['action_type' => 'local_file', 'action_options' => json_encode(['folder' => 'x'])]);
+
+    $response = $this->getJson(landingsEndpoint('preview', ['id' => $landing->id]));
+
+    $response->assertStatus(200);
+    $url = $response->json('url');
+    expect($url)->toContain((string) config('services.traffic_core.url'));
+    expect($url)->toContain('/preview.php?');
+    expect($url)->toContain('type=landing');
+    expect($url)->toContain('id='.$landing->id);
+
+    parse_str(parse_url($url, PHP_URL_QUERY), $query);
+    $expected = hash_hmac('sha256', "landing:{$landing->id}:{$query['expires']}", config('services.traffic_core.preview_secret'));
+    expect($query['token'])->toBe($expected);
+});
+
+it('preview: rejects a non-local_file landing with a validation error', function () {
+    $landing = LandingFactory::new()->create(['action_type' => 'http']);
+
+    $response = $this->getJson(landingsEndpoint('preview', ['id' => $landing->id]));
+
+    $response->assertStatus(406);
+});
+
+it('preview: denies a guest (no current user) with a 403', function () {
+    $landing = LandingFactory::new()->create(['action_type' => 'local_file']);
+    actingAsAdminForLandings(null);
+
+    $response = $this->getJson(landingsEndpoint('preview', ['id' => $landing->id]));
+
+    $response->assertStatus(403);
+});
+
 it('denies a guest (no current user) access to view a landing with a 403', function () {
     $landing = LandingFactory::new()->create();
     actingAsAdminForLandings(null);
