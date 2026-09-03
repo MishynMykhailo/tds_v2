@@ -73,6 +73,7 @@ it('computes clicks/conversions/revenue/cost/profit correctly for an offer with 
     makeOfferClick($offer, ['cost' => 1]);
 
     $response = $this->postJson(offersEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -96,6 +97,7 @@ it('includes an offer with zero clicks, zero-filled', function () {
     $offer = OfferFactory::new()->create(['name' => 'No Clicks Offer']);
 
     $response = $this->postJson(offersEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -114,7 +116,7 @@ it('defaults to the base metric set when no `metrics` are requested', function (
     $offer = OfferFactory::new()->create();
     makeOfferClick($offer, ['is_sale' => true, 'sale_revenue' => 10, 'cost' => 2]);
 
-    $response = $this->postJson(offersEndpoint('withStats'), []);
+    $response = $this->postJson(offersEndpoint('withStats'), ['limit' => 100]);
 
     $response->assertStatus(200);
     $row = collect($response->json('rows'))->firstWhere('id', $offer->id);
@@ -127,6 +129,7 @@ it('never returns a deleted offer, even when explicitly filtered by it', functio
     $deleted = OfferFactory::new()->create(['name' => 'Deleted Offer', 'state' => 'deleted']);
 
     $response = $this->postJson(offersEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 

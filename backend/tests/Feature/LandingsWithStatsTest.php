@@ -74,6 +74,7 @@ it('computes clicks/conversions/revenue/cost/profit correctly for a landing with
     makeLandingClick($landing, ['cost' => 1]);
 
     $response = $this->postJson(landingsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -97,6 +98,7 @@ it('includes a landing with zero clicks, zero-filled', function () {
     $landing = LandingFactory::new()->create(['name' => 'No Clicks Landing']);
 
     $response = $this->postJson(landingsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -115,7 +117,7 @@ it('defaults to the base metric set when no `metrics` are requested', function (
     $landing = LandingFactory::new()->create();
     makeLandingClick($landing, ['is_sale' => true, 'sale_revenue' => 10, 'cost' => 2]);
 
-    $response = $this->postJson(landingsEndpoint('withStats'), []);
+    $response = $this->postJson(landingsEndpoint('withStats'), ['limit' => 100]);
 
     $response->assertStatus(200);
     $row = collect($response->json('rows'))->firstWhere('id', $landing->id);
@@ -128,6 +130,7 @@ it('never returns a deleted landing, even when explicitly filtered by it', funct
     $deleted = LandingFactory::new()->create(['name' => 'Deleted Landing', 'state' => 'deleted']);
 
     $response = $this->postJson(landingsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 

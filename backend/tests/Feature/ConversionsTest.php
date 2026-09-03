@@ -98,9 +98,12 @@ it('returns the conversion statuses dictionary matching legacy Conversion model 
     $response = $this->getJson(conversionsEndpoint('statuses'));
 
     $response->assertStatus(200);
-    $ids = collect($response->json())->pluck('id');
+    $body = collect($response->json());
 
-    expect($ids->all())->toBe(['lead', 'sale', 'rejected', 'rebill']);
+    expect($body->pluck('id')->all())->toBe(['lead', 'sale', 'rejected', 'rebill']);
+    // rebill's real legacy display name is "Upsell", not "Rebill" - a
+    // naive ucfirst($status) can't produce that (found live, 2026-09-03).
+    expect($body->pluck('name')->all())->toBe(['Lead', 'Sale', 'Rejected', 'Upsell']);
 });
 
 it('groups conversions.log by conversion_id and computes revenue/cost/profit per row', function () {
@@ -186,11 +189,11 @@ it('filters conversions.log by campaign_id with IN_LIST', function () {
     expect($campaignIds->all())->toBe([1, 2]);
 });
 
-it('returns 406 from conversions.import when data or currency is missing', function () {
+it('returns a plain-text 500 from conversions.import when data or currency is missing, matching legacy\'s generic Error', function () {
     $response = $this->postJson(conversionsEndpoint('import'), []);
 
-    $response->assertStatus(406);
-    expect($response->json('error'))->toBe('Import data or currency is empty');
+    $response->assertStatus(500);
+    expect($response->getContent())->toBe('Import data or currency is empty');
 });
 
 it('conversions.import: matches by sub_id, defaults to sale status with no status column, syncs click totals', function () {
@@ -246,7 +249,7 @@ it('conversions.import: recognized status variation maps correctly, unrecognized
     expect(\App\Models\Conversion::where('sub_id', 'import-sub-3')->first()->status)->toBe('lead');
 });
 
-it('conversions.import: unknown sub_id is reported as an error, prefixed with the sub_id', function () {
+it('conversions.import: unknown sub_id is reported as an error, no sub_id prefix (matches live legacy)', function () {
     $response = $this->postJson(conversionsEndpoint('import'), [
         'data' => 'no-such-sub-id,10',
         'currency' => 'USD',
@@ -256,7 +259,7 @@ it('conversions.import: unknown sub_id is reported as an error, prefixed with th
     $body = $response->json();
     expect($body['success'])->toBe(0);
     expect($body['total'])->toBe(1);
-    expect($body['errors'])->toBe(['no-such-sub-id: SubID not found "no-such-sub-id"']);
+    expect($body['errors'])->toBe(['SubID not found "no-such-sub-id"']);
 });
 
 it('conversions.import: a malformed row (no comma) is silently dropped, not counted toward total', function () {
@@ -285,4 +288,27 @@ it('returns a real ClicksDefinition-shaped grid definition from conversions.upda
 
     $revenue = collect($data['columns'])->firstWhere('name', 'revenue');
     expect($revenue['metric'])->toBeTrue();
+});
+
+// REAL BUG, found live against legacy port 8090 (2026-09-03): none of
+// this controller's 5 actions had an ACL gate at all - "conversions"
+// isn't a resource any ordinary USER has by default, so real legacy 403s
+// every one of them for a non-admin. See ConversionsController's class
+// docblock for the exact legacy source/message this replicates.
+it('denies every action to a non-admin user with the exact legacy 403 message', function () {
+    $user = UserFactory::new()->create();
+    actingAsAdminForConversions($user);
+
+    foreach (['log', 'logDefinition', 'statuses', 'import', 'updateCostDefinition'] as $action) {
+        $response = $this->postJson(conversionsEndpoint($action), []);
+        expect($response->getStatusCode())->toBe(403);
+        expect($response->json('error'))->toBe('You have no permission to access to this page - Conversions');
+    }
+});
+
+it('denies every action to a guest with the same 403', function () {
+    actingAsAdminForConversions(null);
+
+    $response = $this->postJson(conversionsEndpoint('statuses'), []);
+    expect($response->getStatusCode())->toBe(403);
 });

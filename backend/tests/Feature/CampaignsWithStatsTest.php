@@ -97,6 +97,7 @@ it('computes clicks/conversions/revenue/cost/profit correctly for a campaign wit
     makeConversion($campaign->id, $c3->click_id, ['revenue' => 5, 'status' => 'lead']);
 
     $response = $this->postJson(campaignsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -122,6 +123,7 @@ it('includes a campaign with zero clicks, zero-filled', function () {
     $campaign = CampaignFactory::new()->create(['name' => 'No Clicks Campaign']);
 
     $response = $this->postJson(campaignsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -140,7 +142,7 @@ it('defaults to the base metric set when no `metrics` are requested', function (
     $campaign = CampaignFactory::new()->create();
     makeClick($campaign->id, ['is_sale' => true, 'sale_revenue' => 10, 'cost' => 2]);
 
-    $response = $this->postJson(campaignsEndpoint('withStats'), []);
+    $response = $this->postJson(campaignsEndpoint('withStats'), ['limit' => 100]);
 
     $response->assertStatus(200);
     $row = collect($response->json('rows'))->firstWhere('id', $campaign->id);
@@ -155,6 +157,7 @@ it('excludes clickless campaigns entirely when filtered by state=with_clicks', f
     makeClick($withClicks->id, ['is_sale' => true, 'sale_revenue' => 1]);
 
     $response = $this->postJson(campaignsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
         'filters' => [
             ['name' => 'state', 'operator' => 'EQUALS', 'expression' => 'with_clicks'],
@@ -172,6 +175,7 @@ it('never returns a deleted campaign, even when explicitly filtered by it', func
     $deleted = CampaignFactory::new()->create(['name' => 'Deleted Campaign', 'state' => 'deleted']);
 
     $response = $this->postJson(campaignsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 

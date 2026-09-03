@@ -72,6 +72,7 @@ it('computes clicks/conversions/revenue/cost/profit correctly for a stream with 
     makeStreamClick($stream, ['cost' => 1]);
 
     $response = $this->postJson(streamsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -95,6 +96,7 @@ it('includes a stream with zero clicks, zero-filled', function () {
     $stream = StreamFactory::new()->create(['name' => 'No Clicks Stream']);
 
     $response = $this->postJson(streamsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -113,7 +115,7 @@ it('defaults to the base metric set when no `metrics` are requested', function (
     $stream = StreamFactory::new()->create();
     makeStreamClick($stream, ['is_sale' => true, 'sale_revenue' => 10, 'cost' => 2]);
 
-    $response = $this->postJson(streamsEndpoint('withStats'), []);
+    $response = $this->postJson(streamsEndpoint('withStats'), ['limit' => 100]);
 
     $response->assertStatus(200);
     $row = collect($response->json('rows'))->firstWhere('id', $stream->id);
@@ -126,6 +128,7 @@ it('never returns a deleted stream, even when explicitly filtered by it', functi
     $deleted = StreamFactory::new()->create(['name' => 'Deleted Stream', 'state' => 'deleted']);
 
     $response = $this->postJson(streamsEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Services\AclService;
 use App\Services\ConversionImportService;
 use App\Services\CurrentUserService;
 use App\Services\Grid\GridBuilder;
@@ -27,12 +28,44 @@ use Symfony\Component\HttpFoundation\Response;
  * `statuses`, `import` (see `App\Services\ConversionImportService`), and
  * `updateCostDefinition` (see its own docblock — a prior version left
  * this as a 501 stub on a since-corrected premise).
+ *
+ * REAL BUG, found live against legacy port 8090 (2026-09-03): none of
+ * these 5 actions had an ACL gate. Real legacy gates the WHOLE controller
+ * uniformly, BEFORE any action runs
+ * (`Admin\AdminRequest\AdminRequestFactory::checkAuthorization()` ->
+ * `AclService::isResourceAllowed($user, "conversions")`, throwing a
+ * `DenyError` with the message "You have no permission to access to this
+ * page - Conversions" - `mb_ucfirst($adminRequest->getController())`
+ * appended to a shared translation string, confirmed by reading
+ * application/Admin/AdminRequest/AdminRequestFactory.php:50-51 directly).
+ * "conversions" is NOT a resource any non-admin USER has by default
+ * (verified live: a freshly created USER's `resources` array never
+ * includes it) so this 403s for every ordinary user, not just an
+ * intentionally-restricted one. `self::forbidden()` below + a guard at
+ * the top of every action replicates this.
  */
 class ConversionsController extends Controller
 {
     public function __construct(
         private readonly CurrentUserService $currentUserService,
+        private readonly AclService $aclService,
     ) {}
+
+    private function forbidden(): Response
+    {
+        return ResponseFacade::json([
+            'error' => 'You have no permission to access to this page - Conversions',
+        ], 403);
+    }
+
+    private function denyUnlessAllowed(): ?Response
+    {
+        if (! $this->aclService->isResourceAllowed($this->currentUserService->get(), 'conversions')) {
+            return $this->forbidden();
+        }
+
+        return null;
+    }
 
     /**
      * Legacy conversion status constants (`Traffic\Model\Conversion::LEAD` /
@@ -41,6 +74,20 @@ class ConversionsController extends Controller
      * guess). Order matches `ConversionRepository::getStatuses()`.
      */
     private const STATUSES = ['lead', 'sale', 'rejected', 'rebill'];
+
+    /**
+     * Display names, cross-checked against legacy's real translation
+     * strings (application/Component/Conversions/translations/en.php,
+     * `conversions.statuses`) rather than assumed - `rebill`'s real
+     * legacy label is "Upsell", not a `ucfirst()`-derived "Rebill" (a
+     * naive fallback can never produce that; found live, 2026-09-03).
+     */
+    private const STATUS_NAMES = [
+        'lead' => 'Lead',
+        'sale' => 'Sale',
+        'rejected' => 'Rejected',
+        'rebill' => 'Upsell',
+    ];
 
     /**
      * `conversions.log` column whitelist (logical name -> raw SQL
@@ -142,8 +189,12 @@ class ConversionsController extends Controller
      * same TODO already called out for the other Grid-backed endpoints in
      * this codebase (see EntityGridBuilder docblocks).
      */
-    public function logAction(Request $request): array
+    public function logAction(Request $request): array|Response
     {
+        if ($deny = $this->denyUnlessAllowed()) {
+            return $deny;
+        }
+
         $params = QueryParams::fromRequest($request);
         $params->grouping = ['conversion_id'];
 
@@ -164,8 +215,12 @@ class ConversionsController extends Controller
      * `conversions` table field — see that constant's docblock for what's
      * deliberately excluded and why.
      */
-    public function logDefinitionAction(Request $request): array
+    public function logDefinitionAction(Request $request): array|Response
     {
+        if ($deny = $this->denyUnlessAllowed()) {
+            return $deny;
+        }
+
         $extraParamColumns = [];
         for ($i = 1; $i <= 10; $i++) {
             $extraParamColumns[] = ['name' => "extra_param_{$i}", 'type' => 'string', 'category' => 'params', 'filter' => ['type' => 'string']];
@@ -212,14 +267,18 @@ class ConversionsController extends Controller
      * Legacy `conversions.statuses` -> `ConversionRepository::getStatuses()`
      * (`[{id: LEAD|SALE|REJECTED|REBILL, name: <i18n>}]`). No
      * `LocaleService`/i18n layer exists in this Laravel port yet — `name`
-     * falls back to a plain `ucfirst($status)` (same "static dictionary,
-     * no translation" pattern as `DicsController::currenciesAction()` in
-     * this codebase).
+     * is a hardcoded copy of legacy's real English translation string
+     * (self::STATUS_NAMES) rather than a derived `ucfirst($status)`,
+     * since that can't produce `rebill => "Upsell"`.
      */
-    public function statusesAction(Request $request): array
+    public function statusesAction(Request $request): array|Response
     {
+        if ($deny = $this->denyUnlessAllowed()) {
+            return $deny;
+        }
+
         return array_map(
-            fn (string $status) => ['id' => $status, 'name' => ucfirst($status)],
+            fn (string $status) => ['id' => $status, 'name' => self::STATUS_NAMES[$status]],
             self::STATUSES,
         );
     }
@@ -237,13 +296,23 @@ class ConversionsController extends Controller
      */
     public function importAction(Request $request): Response
     {
+        if ($deny = $this->denyUnlessAllowed()) {
+            return $deny;
+        }
+
         $data = $request->input('data');
         $currency = $request->input('currency');
 
+        // CORRECTION (2026-09-03): a prior version of this returned a JSON
+        // 406 here, unverified. Live-checked against legacy port 8090 for
+        // BOTH missing `data` and missing `currency`: real legacy throws a
+        // generic `\Core\Application\Exception\Error("Import data or
+        // currency is empty")` (application/Component/Conversions/
+        // Controller/ConversionsController.php:33) — same class as
+        // "Must be post request" elsewhere in this codebase, which falls
+        // to the catch-all handler: HTTP 500, plain text, not JSON.
         if (empty($data) || empty($currency)) {
-            $message = 'Import data or currency is empty';
-
-            return ResponseFacade::json(['error' => $message, 'stacktrace' => (new \Exception($message))->getTraceAsString()], 406);
+            return response('Import data or currency is empty', 500);
         }
 
         return ResponseFacade::json((new ConversionImportService())->import($data));
@@ -295,8 +364,12 @@ class ConversionsController extends Controller
      * names instead (matches `ReportsController::BUILD_COLUMNS_BASE`
      * again, which made the identical call for the same columns).
      */
-    public function updateCostDefinitionAction(Request $request): array
+    public function updateCostDefinitionAction(Request $request): array|Response
     {
+        if ($deny = $this->denyUnlessAllowed()) {
+            return $deny;
+        }
+
         $subIdColumns = [];
         for ($i = 1; $i <= 15; $i++) {
             $subIdColumns[] = ['name' => "sub_id_{$i}", 'type' => 'string', 'sortable' => true, 'groupable' => true, 'filter' => ['type' => 'string'], 'category' => 'sub_ids', 'width' => 100];

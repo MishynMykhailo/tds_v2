@@ -64,6 +64,25 @@ class QueryParams
         $params->summary = filter_var($body['summary'] ?? false, FILTER_VALIDATE_BOOLEAN);
         $params->format = is_string($body['format'] ?? null) ? $body['format'] : 'array';
 
+        // REAL BUG, found live against legacy port 8090 (2026-09-03):
+        // `hasRangeOrLimit()` below existed but was never actually called
+        // anywhere in this codebase — every one of the 7 controllers that
+        // build a QueryParams (reports.build, conversions.log, and the 5
+        // withStats actions) silently accepted a bare request with
+        // neither `range` nor `limit` and ran an unbounded query. Real
+        // legacy `QueryParams::__construct()` throws a generic `Error`
+        // ("You must provide \"range\" or \"limit\"") right here, at
+        // parse time (application/Component/Grid/QueryParams/
+        // QueryParams.php:163) - confirmed live for BOTH conversions.log
+        // and campaigns.withStats (500 on both in real legacy). Same
+        // "generic Error -> catch-all handler -> 500, plain text, not
+        // JSON" shape already established elsewhere in this codebase
+        // (see SettingsController::updateAction()'s "Must be post
+        // request" for the identical pattern).
+        if (! $params->hasRangeOrLimit()) {
+            abort(500, 'You must provide "range" or "limit"');
+        }
+
         return $params;
     }
 

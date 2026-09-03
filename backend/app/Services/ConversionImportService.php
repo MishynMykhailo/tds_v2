@@ -137,13 +137,18 @@ class ConversionImportService
 
         $click = Click::where('sub_id', $subId)->first();
 
-        // Port of legacy's `NotFoundError` branch — DOES get the sub_id
-        // prefix, unlike the branch above (`$entry[self::SUB_ID_NAME] . ": "
-        // . $e->getMessage()`). Message text matches
-        // `TrafficCore\Postback\PostbackProcessor`'s own port of this same
-        // legacy error for consistency between the two independent ports.
+        // CORRECTION (2026-09-03): a prior version of this docblock claimed
+        // this hits legacy's `NotFoundError` catch branch and therefore
+        // gets a sub_id prefix - live-verified against legacy port 8090
+        // that's wrong: `PayloadFactory` throws "sub_id_not_found" as a
+        // `PostbackError`, not a `NotFoundError` (confirmed by reading
+        // application/Component/Postback/ProcessPostback/PayloadFactory.php
+        // directly), so it lands in the SAME no-prefix catch branch as the
+        // empty-subid case above. Now matches
+        // `TrafficCore\Postback\PostbackProcessor`'s already-correct port
+        // of this same legacy error.
         if ($click === null) {
-            return sprintf('%s: SubID not found "%s"', $subId, $subId);
+            return sprintf('SubID not found "%s"', $subId);
         }
 
         $status = $this->resolveStatus($entry['status']);

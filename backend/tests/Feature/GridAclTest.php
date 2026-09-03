@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\AclResource;
 use App\Models\AclRule;
 use App\Models\Click;
 use App\Models\Conversion;
@@ -67,6 +68,7 @@ it('campaigns.withStats: an ADMIN sees every campaign with stats', function () {
     actingAsForGridAcl($admin);
 
     $response = $this->postJson(gridAclEndpoint('campaigns', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -91,6 +93,7 @@ it('campaigns.withStats: a USER with a to_groups_and_selected rule sees only the
     actingAsForGridAcl($user);
 
     $response = $this->postJson(gridAclEndpoint('campaigns', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -108,6 +111,7 @@ it('campaigns.withStats: a USER with no acl_rules row at all sees no campaigns',
     actingAsForGridAcl($user);
 
     $response = $this->postJson(gridAclEndpoint('campaigns', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -130,6 +134,7 @@ it('campaigns.withStats: a USER with a full_access rule sees every campaign', fu
     actingAsForGridAcl($user);
 
     $response = $this->postJson(gridAclEndpoint('campaigns', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -162,6 +167,7 @@ it('streams.withStats: a USER only sees streams whose parent campaign is allowed
     actingAsForGridAcl($user);
 
     $response = $this->postJson(gridAclEndpoint('streams', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -193,6 +199,7 @@ it('offers.withStats: a USER with a to_groups_and_selected rule sees only the al
     actingAsForGridAcl($user);
 
     $response = $this->postJson(gridAclEndpoint('offers', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -209,6 +216,7 @@ it('offers.withStats: an unauthenticated (null) user sees no offers', function (
     actingAsForGridAcl(null);
 
     $response = $this->postJson(gridAclEndpoint('offers', 'withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
@@ -308,6 +316,12 @@ it('conversions.log: a USER only sees conversions whose campaign_id is allowed',
         'access_type' => AclRule::TO_GROUPS_AND_SELECTED,
         'entities' => [$allowedCampaign->id],
     ]);
+
+    // "conversions" resource-level access - separate from the per-campaign
+    // AclRule above. Real legacy gates the WHOLE controller on this first
+    // (ConversionsController's class docblock, found live 2026-09-03);
+    // without it, every action 403s before campaign filtering ever runs.
+    AclResource::create(['user_id' => $user->id, 'resources' => ['conversions']]);
 
     actingAsForGridAcl($user);
 

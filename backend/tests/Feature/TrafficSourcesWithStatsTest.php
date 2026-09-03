@@ -78,6 +78,7 @@ it('computes clicks/conversions/revenue/cost/profit correctly for a traffic sour
     makeTrafficSourceClick($trafficSource, ['cost' => 1]);
 
     $response = $this->postJson(trafficSourcesEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -101,6 +102,7 @@ it('includes a traffic source with zero clicks, zero-filled', function () {
     $trafficSource = TrafficSourceFactory::new()->create(['name' => 'No Clicks TS']);
 
     $response = $this->postJson(trafficSourcesEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks', 'conversions', 'revenue', 'cost', 'profit'],
     ]);
 
@@ -119,7 +121,7 @@ it('defaults to the base metric set when no `metrics` are requested', function (
     $trafficSource = TrafficSourceFactory::new()->create();
     makeTrafficSourceClick($trafficSource, ['is_sale' => true, 'sale_revenue' => 10, 'cost' => 2]);
 
-    $response = $this->postJson(trafficSourcesEndpoint('withStats'), []);
+    $response = $this->postJson(trafficSourcesEndpoint('withStats'), ['limit' => 100]);
 
     $response->assertStatus(200);
     $row = collect($response->json('rows'))->firstWhere('id', $trafficSource->id);
@@ -132,6 +134,7 @@ it('never returns a deleted traffic source, even when explicitly filtered by it'
     $deleted = TrafficSourceFactory::new()->create(['name' => 'Deleted TS', 'state' => 'deleted']);
 
     $response = $this->postJson(trafficSourcesEndpoint('withStats'), [
+        'limit' => 100,
         'metrics' => ['clicks'],
     ]);
 
