@@ -14,12 +14,16 @@
  *
  * Flow (mirrors `PostbackDispatcher::dispatch()`):
  *  1. Find the secret key — `PostbackAuthService::findKey()` (the two
- *     real legacy mechanisms, both query-based) OR, as a fallback,
- *     `findPathKey()` (NEW, pretty-URL `/{key}/postback` form — no
- *     legacy equivalent, requested by the project owner; needs a
- *     webserver rewrite in front to actually reach this file with that
- *     shape of URL, see `deploy/nginx-traffic-core.conf.example` and
- *     `public/router.php` for local dev) — then validate it against
+ *     query-based mechanisms) OR, as a fallback, `findPathKey()`
+ *     (pretty-URL `/{key}/postback` form — see that method's docblock:
+ *     a prior version of THIS docblock claimed this had no legacy
+ *     equivalent, which was wrong. `Core\Router\TrafficRouter` already
+ *     routes this exact path shape to `PostbackContext` natively,
+ *     verified live against legacy port 8090. Kept as a real port, just
+ *     discovered after the fact; needs a webserver rewrite in front to
+ *     actually reach this file with that shape of URL, see
+ *     `deploy/nginx-traffic-core.conf.example` and `public/router.php`
+ *     for local dev) — then validate it against
  *     `settings.postback_key` (`PostbackAuthService::isValid()`).
  *     Wrong/missing key -> reject immediately, no processing at all,
  *     matching legacy's own ordering (secret checked before the request
@@ -84,7 +88,8 @@ $returnFormat = isset($query['return']) ? (string) $query['return'] : null;
 $authService = new PostbackAuthService();
 // Query-based key first (the two real legacy mechanisms), pretty-URL
 // path key (`/{key}/postback`, see PostbackAuthService::findPathKey()'s
-// docblock — new, no legacy equivalent) as a fallback.
+// docblock — also a genuine legacy mechanism, TrafficRouter routes it
+// natively) as a fallback.
 $key = $authService->findKey($request) ?? $authService->findPathKey($request);
 
 header('Cache-Control: no-cache, no-store, must-revalidate');

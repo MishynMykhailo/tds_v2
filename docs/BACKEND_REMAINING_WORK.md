@@ -133,8 +133,20 @@ domains) — итого ~26 задач, полный список с обосн�
 - **`app:prune-expired-password-hashes`** (`->daily()`) — просроченные
   `user_password_hashes` (порт `Users\PruneTask\PruneUserPasswordHash`).
 
-Все 4 — no-op по умолчанию на чистой установке (governing setting
-`archive_ttl`/`stats_ttl` не задан = очистка выключена, как в легаси).
+**ИСПРАВЛЕНИЕ (2026-09-03, стресс-проверка):** утверждение "no-op по
+умолчанию на чистой установке" выше — УСТАРЕЛО/НЕВЕРНО, написано до того
+как `SettingsSeeder` был добавлен в этой же сессии позже (см. запись
+"Разбор оставшихся контрактных падений" в PORTING_LOG.md). Реальный
+легаси fresh-install (`application/data/data.sql`) сеет `archive_ttl=60`
+И `stats_ttl=256` — НЕ пусто/0 — то есть pruning в легаси АКТИВЕН по
+умолчанию, а не выключен (`Pruner::isCleanDisabled()`/`PruneClicks::run()`
+трактуют только `empty()`/`== 0` как "выключено", легаси-дефолт — ни то,
+ни другое). `SettingsSeeder` сеет те же значения — значит поведение порта
+УЖЕ корректно совпадает с легаси (pruning активен из коробки), просто эта
+строка документации не была обновлена после добавления сидера. Живьём
+подтверждено: `app:prune-click-stats` на текущей dev-БД реально
+диспатчит `DeleteStatsJob` с cutoff `-256 дней`, `app:prune-orphaned-data`
+реально удалил осиротевшего visitor'а — оба ожидаемо активны, не no-op.
 Тесты: `tests/Feature/PruneCommandsTest.php` (6 тестов). Живая проверка
 на реальном MySQL (Docker `tds2-mysql`) через `php artisan tinker` +
 `php artisan queue:work --once --stop-when-empty` (для `prune-click-stats`,

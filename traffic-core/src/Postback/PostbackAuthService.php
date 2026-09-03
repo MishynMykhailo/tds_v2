@@ -73,15 +73,25 @@ class PostbackAuthService
     }
 
     /**
-     * NEW (no legacy equivalent — the two mechanisms `findKey()` already
-     * ports are legacy's real, only ones): pretty-URL key, `/{key}/postback`
-     * — e.g. `https://yourdomain.com/6a05078/postback?subid=...` instead
-     * of `?key=6a05078&subid=...`. Requested by the project owner: a
-     * bare query param leaks the fact that it's a "secret" more than a
-     * URL path segment does, and matches the shape real Keitaro-family
-     * installs are commonly configured with in production (via a
-     * webserver rewrite in front of the app — see `deploy/nginx-traffic-
-     * core.conf.example`).
+     * CORRECTION (2026-09-03): a prior version of this docblock claimed
+     * "NEW, no legacy equivalent" — that was WRONG, caught during this
+     * session's exhaustive audit by reading `Core\Router\TrafficRouter`
+     * directly (not just the two `PostbackDispatcher::_findKey()`
+     * mechanisms this class already ported). Legacy's router ALREADY has
+     * a first-class route for exactly this shape:
+     * `["pattern" => "/\/([a-z0-9\-_]+)\/postback/i", "context" =>
+     * "Traffic\Context\PostbackContext", "param" =>
+     * TrafficRouter::PARAM_KEY]` (checked before every other route except
+     * `admin_api`) — the matched path segment is injected as the router
+     * param that `_findKey()` reads first. Verified live against legacy
+     * port 8090: `GET /anything123/postback?subid=x` really does reach
+     * `PostbackDispatcher` (responds "Incorrect postback code (anything123
+     * in 1)"), not a generic 404. So `/{key}/postback` is a genuine
+     * pre-existing legacy mechanism, not a project-owner-requested
+     * addition — this method is a real port, just discovered after the
+     * fact. Charset tightened to match legacy's pattern exactly
+     * (`[a-zA-Z0-9_-]+`, legacy's `/i` flag covers uppercase) rather than
+     * the previous over-permissive `[^/]+`.
      *
      * traffic-core has no routing layer of its own (every entry point is
      * a literal file under `public/`) — reaching this method with a
@@ -96,7 +106,7 @@ class PostbackAuthService
     {
         $path = $request->getUri()->getPath();
 
-        if (preg_match('#^/([^/]+)/postback/?$#', $path, $matches) === 1) {
+        if (preg_match('#^/([a-zA-Z0-9_-]+)/postback/?$#', $path, $matches) === 1) {
             $key = urldecode($matches[1]);
 
             return $key !== '' ? $key : null;
