@@ -9,6 +9,18 @@
             <directory suffix="Test.php">./tests</directory>
         </testsuite>
     </testsuites>
+    <groups>
+        <!-- CampaignsTest's "smoke" group hits a historical legacy fixture
+             row (id=4, "qbrtcz2") that only exists on the shared legacy
+             database, not a fresh DB or new-backend install: excluded from
+             the default run so a plain pest run is green against either
+             target out of the box. Run it explicitly (pass the group flag
+             for "smoke") against the legacy target when you want that
+             connectivity sanity check. -->
+        <exclude>
+            <group>smoke</group>
+        </exclude>
+    </groups>
     <source>
         <include>
             <directory suffix=".php">./app</directory>

@@ -380,36 +380,28 @@ PORTING_LOG.md` ("Разбор оставшихся контрактных па�
   перепроверки — контрактный тест был единственным источником правды,
   который действительно смотрел на реальный легаси.
 
-**Остаётся падать (11, живьём не разобрано, есть только первичный
-диагноз ниже — следующая сессия)**:
-- `ApiKeysTest` (2) — `apiKeys.add`/`apiKeys.delete` отдают 404. Похоже
-  на несуществующий/неправильно названный action (тот же паттерн, что
-  был у `ProfileController::indexAction` — проверить реальные имена
-  action'ов в легаси `Component\ApiKeys\Controller\ApiKeysController`).
-- `CampaignsTest`'s legacy-fixture smoke test (id=4, "qbrtcz2") — НЕ
-  относится к свежей БД, это historical-фикстура из другого окружения,
-  можно игнорировать/пометить `--group=smoke` как есть (тест сам себя
-  так описывает).
-- `GroupsTest` — дубликат имени группы не отклоняется 406 (нет
-  uniqueness-валидации на `groups.create`, надо сверить с легаси
-  `GroupValidator`/аналогом).
-- `UserPreferencesTest` (1, на деле 3 assertion-строки в одном месте) —
-  `userPreferences.get` отдаёт JSON-обёрнутое значение (`"value"` в
-  кавычках, `"null"` для отсутствующего) вместо RAW-строки без кавычек
-  (контроллер, похоже, зовёт `response()->json($value)` вместо
-  `response($value)`/plain-text).
-- `UsersTest` (3) — `Fixtures::createUser()` шлёт payload без
-  `new_password`, но `UsersController::createAction` теперь требует
-  его 406-кой ("The new password field is required") — сверить с
-  легаси: обязателен ли `new_password` при СОЗДАНИИ (а не смене пароля
-  существующего юзера)? Плюс `users.listAsOptions` — легаси такого
-  action не имеет (тест ожидает 404), новый бэкенд отдаёт 200 —
-  проверить, реально ли добавлен лишний action или тест ошибается.
+**Все 11 закрыты (2026-09-03) — подробности `docs/PORTING_LOG.md` ("Все 11
+оставшихся контрактных падений разобраны и закрыты").** Кратко:
+`ApiKeysController` action-имена возвращены к легаси (`getAll/add/delete` —
+переименование в `index/create/remove` было реальным багом, не
+"тем же отклонением, что у Users/Groups", как утверждал докблок — те два
+контроллера и в легаси уже `index/create/...`); `GroupsController` получил
+реальную uniqueness-валидацию имени в рамках `type` (легаси `GroupValidator`
+её действительно делает); `UserPreferencesController::getAction()`
+перестал JSON-оборачивать сырое значение; `UsersTest` — фикстура
+`tests-contract` чинена на отправку `password_hash`+`new_password` разом
+(легаси требует первое, порт — второе, оба поля не мешают друг другу), а
+неавторизованный `listAsOptionsAction` (нет в легаси вообще) — удалён;
+`CampaignsTest`'s `smoke`-группа теперь реально исключена из дефолтного
+прогона через `tests-contract/phpunit.xml`.
 
-Перезапуск для разбора: `TDS_TEST_TARGET=http://localhost:PORT
-vendor/bin/pest` в `tests-contract/`, бэкенд — `php artisan serve
---port=PORT`, легаси для сверки уже поднят постоянно в Docker
-(`tds-app`, порт 8090, логин `admin`/`TdsAdmin2026!`).
+`tests-contract` (без `smoke`) — **92/92 на новом бэкенде И на легаси**.
+`backend/./vendor/bin/pest` — 383/383.
+
+Перезапуск: `TDS_TEST_TARGET=http://localhost:PORT vendor/bin/pest` в
+`tests-contract/`, бэкенд — `php artisan serve --port=PORT`, легаси для
+сверки уже поднят постоянно в Docker (`tds-app`, порт 8090, логин
+`admin`/`TdsAdmin2026!`).
 
 Уже покрыты (документные, теперь и реально работающие против нового
 бэкенда): Auth, Groups, Campaigns, Streams, Offers, Domains,

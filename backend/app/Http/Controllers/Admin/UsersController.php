@@ -27,9 +27,7 @@ use Symfony\Component\HttpFoundation\Response;
  * Contract reference: docs/legacy-reference/frontend/api/10.8_users_groups_acl.md.
  *
  * Only a subset of the legacy action list is implemented (index, show,
- * create, update, listAsOptions — the last one has NO legacy counterpart at
- * all, added per task brief for parity with the other *Controller ports'
- * select-option endpoints) — see per-method TODOs for what still depends on
+ * create, update) — see per-method TODOs for what still depends on
  * modules not yet ported: `delete` (FeatureService-gated "can't delete last
  * admin" + cascading token invalidation), `setAccessData` (per-user ACL
  * rule editing UI, `AclService::saveAcl()` — a materially different write
@@ -313,24 +311,6 @@ class UsersController extends Controller
         }
 
         return response()->json($this->serializeUser($user));
-    }
-
-    public function listAsOptionsAction(Request $request): Response
-    {
-        $currentUser = $this->currentUserService->get();
-        if (! $currentUser || ! $currentUser->isAdmin()) {
-            return $this->forbidden('You are not allowed to manage users');
-        }
-
-        $users = User::query()->orderBy('login')->get();
-
-        $items = $users->map(fn (User $u) => [
-            'id' => $u->id,
-            'value' => $u->id,
-            'name' => $u->login,
-        ])->values();
-
-        return response()->json($items);
     }
 
     // ---------------------------------------------------------------

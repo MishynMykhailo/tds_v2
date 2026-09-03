@@ -254,9 +254,28 @@ final class Fixtures
     {
         $token = self::randomToken('u');
 
+        // Legacy `UserValidator` requires `login`/`type`/`password_hash`
+        // (the last taken as a RAW, already-hashed literal stored verbatim
+        // - a legacy security anti-pattern, verified by reading
+        // `Component\Users\Validator\UserValidator`/`UserService::createUser()`
+        // directly). The Laravel port deliberately does NOT accept a raw
+        // password_hash from the client (that would let a caller plant an
+        // arbitrary auth hash) - it requires `new_password`/
+        // `new_password_confirmation` instead and hashes server-side via
+        // Hash::make() (see UsersController::createAction()). `new_password`
+        // is entirely optional in legacy's createUser() (isset() guarded),
+        // so sending both sets of fields together is accepted by BOTH
+        // targets (verified live against legacy port 8090): legacy's
+        // required-field check is satisfied by password_hash, and its
+        // optional new_password branch also runs and overwrites
+        // password/password_hash with a properly encoded value (harmless);
+        // the new backend ignores password_hash entirely and uses
+        // new_password.
         $payload = array_merge([
             'login' => 'ct_user_' . $token,
             'password_hash' => 'CtPass!' . $token,
+            'new_password' => 'CtPass!' . $token,
+            'new_password_confirmation' => 'CtPass!' . $token,
             'type' => 'USER',
         ], $overrides);
 

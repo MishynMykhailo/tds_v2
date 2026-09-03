@@ -71,22 +71,23 @@ it('gets a single preference value by pref_name', function () {
     $response = $this->getJson(userPreferencesEndpoint('get', ['pref_name' => 'language']));
 
     $response->assertStatus(200);
-    expect($response->json())->toBe('en');
+    // Raw, unquoted body per the real legacy contract (verified live
+    // against legacy port 8090, see tests-contract/tests/
+    // UserPreferencesTest.php) — NOT JSON-encoded, so asserted via
+    // ->getContent() rather than ->json().
+    expect($response->getContent())->toBe('en');
 });
 
-it('gets null for a preference that does not exist', function () {
+it('gets an empty body for a preference that does not exist', function () {
     $user = UserFactory::new()->create();
     actingAsForUserPreferences($user);
 
     $response = $this->getJson(userPreferencesEndpoint('get', ['pref_name' => 'nope']));
 
     $response->assertStatus(200);
-    // NOTE: intentionally not asserting via ->json() here — Laravel's
-    // TestResponse::decodeResponseJson() treats a decoded `null` as
-    // indistinguishable from a JSON decode failure and fails the test
-    // ("Invalid JSON was returned from the route."), even though a bare
-    // `null` body is perfectly valid JSON. Asserting the raw body instead.
-    expect($response->getContent())->toBe('null');
+    // Legacy: HTTP 200 with an EMPTY body for an unset pref_name, not a
+    // JSON `null` — verified live against legacy port 8090.
+    expect($response->getContent())->toBe('');
 });
 
 it('sets a new preference', function () {

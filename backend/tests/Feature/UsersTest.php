@@ -230,26 +230,15 @@ it('returns 404 updating a non-existent user', function () {
     $response->assertStatus(404);
 });
 
-it('lists users as options', function () {
-    UserFactory::new()->count(2)->create();
-
+it('has no listAsOptions action, matching legacy (404)', function () {
+    // Legacy `Component\Users\Controller\UsersController` has no
+    // `listAsOptionsAction` at all (verified by reading the legacy source
+    // directly — only index/create/show/update/delete/setAccessData exist).
+    // A prior version of this port added one anyway ("harmless extra
+    // endpoint"), which tests-contract/tests/UsersTest.php caught as a
+    // contract mismatch (legacy 404s this object.action). Removed to match
+    // legacy exactly — see docs/PORTING_LOG.md.
     $response = $this->getJson(usersEndpoint('listAsOptions'));
 
-    $response->assertStatus(200);
-
-    $data = $response->json();
-    expect($data)->toBeArray()->and($data)->toHaveCount(3);
-
-    foreach ($data as $item) {
-        expect($item)->toHaveKey('id');
-        expect($item)->toHaveKey('name');
-    }
-});
-
-it('denies listAsOptions to a guest with a 403', function () {
-    actingAsForUsers(null);
-
-    $response = $this->getJson(usersEndpoint('listAsOptions'));
-
-    $response->assertStatus(403);
+    $response->assertStatus(404);
 });

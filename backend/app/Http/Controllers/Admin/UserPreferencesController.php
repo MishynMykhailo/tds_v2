@@ -126,7 +126,7 @@ class UserPreferencesController extends Controller
         return response()->json($preferences->map(fn (UserPreference $p) => $this->serializePreference($p))->values());
     }
 
-    public function getAction(Request $request): Response
+    public function getAction(Request $request): Response|string|null
     {
         $user = $this->currentUserService->get();
         if (! $user) {
@@ -136,21 +136,23 @@ class UserPreferencesController extends Controller
         $prefName = $this->param($request, 'pref_name');
 
         // Legacy `UserPreferenceRepository::get()` returns the raw scalar
-        // `pref_value` directly (via `DataRepository::getOne()`), not a
-        // wrapped object — matched here with a bare JSON body (a quoted
-        // string, or a literal `null` when unset), not `{"pref_value":
-        // ...}`. NOT built via `response()->json($value)`: Symfony's
-        // JsonResponse silently rewrites a `null` `$data` argument into
-        // `new \ArrayObject()` (see JsonResponse::__construct()'s
-        // `$data ??= new \ArrayObject()`), which would serialize a missing
-        // preference as `{}` instead of `null` — encoding it manually
-        // sidesteps that.
-        $value = UserPreference::query()
+        // `pref_value` directly (via `DataRepository::getOne()`), and
+        // `ObjectDispatchController::handle()` passes any non-array/object
+        // action result through as a plain string body (`response((string)
+        // $result)`), NOT JSON-encoded — verified live against legacy port
+        // 8090: a set value round-trips completely unquoted, and an unset
+        // pref_name is HTTP 200 with an EMPTY body (not JSON `null`). A
+        // prior version of this action wrapped the value in `json_encode()`
+        // instead, which quoted strings and produced the literal text
+        // `null` for a missing preference — both wrong against the real
+        // contract (tests-contract's UserPreferencesTest asserts the raw,
+        // unquoted body). Returning the bare scalar here lets
+        // ObjectDispatchController's generic (string) cast do the right
+        // thing: the string itself, or '' for a real `null`.
+        return UserPreference::query()
             ->where('user_id', $user->id)
             ->where('pref_name', $prefName)
             ->value('pref_value');
-
-        return response(json_encode($value))->header('Content-Type', 'application/json');
     }
 
     public function setAction(Request $request): Response

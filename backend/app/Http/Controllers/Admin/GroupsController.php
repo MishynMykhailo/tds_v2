@@ -37,10 +37,14 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * `showAction` has NO legacy counterpart (legacy only exposes
  * index/listAsOptions/create/update/delete) — added per task brief for
- * CRUD symmetry with the other ported *Controller classes, same
- * "documented addition" treatment as
- * UsersController::listAsOptionsAction(). `delete` is NOT ported (task
- * brief only asked for the 5 actions below) — it also cascades
+ * CRUD symmetry with the other ported *Controller classes. NOTE
+ * (2026-09-03): the analogous addition on `UsersController`
+ * (`listAsOptionsAction`, no legacy counterpart there either) turned out to
+ * be a real contract-test failure (tests-contract expects a 404) and was
+ * removed — this one has no such failing test yet, so it's left as-is, but
+ * treat "documented addition, presumed harmless" claims like this with
+ * suspicion until a contract test actually exercises them. `delete` is NOT
+ * ported (task brief only asked for the 5 actions below) — it also cascades
  * (`group_id = NULL` on every member Campaign/Offer/Landing +
  * `AclService::onGroupDelete()`), out of scope here.
  */
@@ -216,6 +220,10 @@ class GroupsController extends Controller
             return $this->forbidden('You are not allowed to create groups');
         }
 
+        if ($this->nameTaken($params['name'], (string) $type)) {
+            return $this->validationError(['name' => ['This value has already used']]);
+        }
+
         $group = new Group;
         $group->name = $params['name'];
         $group->type = $type;
@@ -256,7 +264,11 @@ class GroupsController extends Controller
             return $this->validationError($errors);
         }
 
-        if (array_key_exists('name', $params)) {
+        if (array_key_exists('name', $params) && $params['name'] !== $group->name) {
+            if ($this->nameTaken($params['name'], (string) $group->type, excludeId: $group->id)) {
+                return $this->validationError(['name' => ['This value has already used']]);
+            }
+
             $group->name = $params['name'];
         }
 
@@ -363,6 +375,21 @@ class GroupsController extends Controller
      * here with a proper 406 so callers get a structured error). NOT
      * ported (TODO): uniqueness(name) scoped by type.
      */
+    // Legacy `GroupValidator`'s `"uniqueness" => [["name",
+    // Group::definition(), "type = {type}"]]` — a duplicate `name` within
+    // the same `type` is rejected 406 (`Valitron`'s `uniqueness` rule,
+    // registered in `Core\Application\Bootstrap::initValidators()`, always
+    // excludes the row's own id — verified live against legacy port 8090:
+    // creating the same name+type twice 406s with exactly this message).
+    private function nameTaken(string $name, string $type, ?int $excludeId = null): bool
+    {
+        return Group::query()
+            ->where('name', $name)
+            ->where('type', $type)
+            ->when($excludeId !== null, fn ($q) => $q->where('id', '!=', $excludeId))
+            ->exists();
+    }
+
     private function validateGroupParams(array $params, bool $partial = false): array
     {
         $errors = [];

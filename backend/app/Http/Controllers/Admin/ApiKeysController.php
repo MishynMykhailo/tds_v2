@@ -26,11 +26,16 @@ use Symfony\Component\HttpFoundation\Response;
  * для админа, смотреть чужие ключи), add (генерирует случайный ключ),
  * delete (keyId)."
  *
- * Action names follow this port's established RESTish convention
- * (index/create/remove) rather than legacy's exact getAll/add/delete —
- * same divergence UsersController/GroupsController already take from their
- * legacy action names, for consistency across this codebase's *Controller
- * classes (see e.g. FavouriteStreamsController::removeAction()).
+ * Action names match legacy exactly: getAll/add/delete (verified live,
+ * 2026-09-03 — a prior version of this file renamed them to
+ * index/create/remove on the false premise that "UsersController/
+ * GroupsController already take this divergence"; reading the actual
+ * legacy `Component\Users\Controller\UsersController`/`GroupsController`
+ * shows those two controllers' legacy action names already ARE
+ * index/create/show/update/delete, so there was no divergence to be
+ * consistent with — `ObjectDispatchController::handle()` maps
+ * `object=apiKeys.add` to the literal method `addAction`, with no alias
+ * table, so any renamed action here is unreachable and 404s).
  *
  * ACL: no AclService entity-type involved (API keys aren't a
  * campaigns/offers/... style entity) — access is gated purely on
@@ -155,7 +160,7 @@ class ApiKeysController extends Controller
     // Actions
     // ---------------------------------------------------------------
 
-    public function indexAction(Request $request): Response
+    public function getAllAction(Request $request): Response
     {
         $user = $this->resolveUser($request);
         if ($user instanceof Response) {
@@ -167,7 +172,7 @@ class ApiKeysController extends Controller
         return response()->json($keys->map(fn (ApiKey $k) => $this->serializeApiKey($k))->values());
     }
 
-    public function createAction(Request $request): Response
+    public function addAction(Request $request): Response
     {
         $user = $this->resolveUser($request);
         if ($user instanceof Response) {
@@ -189,7 +194,7 @@ class ApiKeysController extends Controller
         return response()->json($this->serializeApiKey($key));
     }
 
-    public function removeAction(Request $request): ?Response
+    public function deleteAction(Request $request): ?Response
     {
         $user = $this->resolveUser($request);
         if ($user instanceof Response) {

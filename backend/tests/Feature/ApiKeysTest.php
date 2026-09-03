@@ -42,7 +42,7 @@ it('lists the current user\'s own keys', function () {
     ApiKeyFactory::new()->count(3)->create(); // someone else's keys
     actingAsForApiKeys($user);
 
-    $response = $this->getJson(apiKeysEndpoint('index'));
+    $response = $this->getJson(apiKeysEndpoint('getAll'));
 
     $response->assertStatus(200);
     $data = $response->json();
@@ -57,7 +57,7 @@ it('lists the current user\'s own keys', function () {
 it('denies index to a guest with a 403', function () {
     actingAsForApiKeys(null);
 
-    $response = $this->getJson(apiKeysEndpoint('index'));
+    $response = $this->getJson(apiKeysEndpoint('getAll'));
 
     $response->assertStatus(403);
 });
@@ -68,7 +68,7 @@ it('lets an admin list another user\'s keys via userId', function () {
     ApiKeyFactory::new()->forUser($target)->count(2)->create();
     actingAsForApiKeys($admin);
 
-    $response = $this->getJson(apiKeysEndpoint('index', ['userId' => $target->id]));
+    $response = $this->getJson(apiKeysEndpoint('getAll', ['userId' => $target->id]));
 
     $response->assertStatus(200);
     expect($response->json())->toHaveCount(2);
@@ -80,7 +80,7 @@ it('denies a non-admin from listing another user\'s keys via userId with a 403',
     ApiKeyFactory::new()->forUser($target)->create();
     actingAsForApiKeys($user);
 
-    $response = $this->getJson(apiKeysEndpoint('index', ['userId' => $target->id]));
+    $response = $this->getJson(apiKeysEndpoint('getAll', ['userId' => $target->id]));
 
     $response->assertStatus(403);
 });
@@ -89,7 +89,7 @@ it('creates a random 32-char hex key for the current user', function () {
     $user = UserFactory::new()->create();
     actingAsForApiKeys($user);
 
-    $response = $this->postJson(apiKeysEndpoint('create'));
+    $response = $this->postJson(apiKeysEndpoint('add'));
 
     $response->assertStatus(200);
     $data = $response->json();
@@ -101,7 +101,7 @@ it('creates a random 32-char hex key for the current user', function () {
 it('denies create to a guest with a 403', function () {
     actingAsForApiKeys(null);
 
-    $response = $this->postJson(apiKeysEndpoint('create'));
+    $response = $this->postJson(apiKeysEndpoint('add'));
 
     $response->assertStatus(403);
 });
@@ -111,7 +111,7 @@ it('removes one of the current user\'s own keys', function () {
     $key = ApiKeyFactory::new()->forUser($user)->create();
     actingAsForApiKeys($user);
 
-    $response = $this->postJson(apiKeysEndpoint('remove', ['keyId' => $key->id]));
+    $response = $this->postJson(apiKeysEndpoint('delete', ['keyId' => $key->id]));
 
     $response->assertStatus(200);
     $this->assertDatabaseMissing('api_keys', ['id' => $key->id]);
@@ -122,7 +122,7 @@ it('returns 404 removing a key that belongs to someone else', function () {
     $otherKey = ApiKeyFactory::new()->create();
     actingAsForApiKeys($user);
 
-    $response = $this->postJson(apiKeysEndpoint('remove', ['keyId' => $otherKey->id]));
+    $response = $this->postJson(apiKeysEndpoint('delete', ['keyId' => $otherKey->id]));
 
     $response->assertStatus(404);
     $this->assertDatabaseHas('api_keys', ['id' => $otherKey->id]);
@@ -132,7 +132,7 @@ it('returns 404 removing a non-existent key', function () {
     $user = UserFactory::new()->create();
     actingAsForApiKeys($user);
 
-    $response = $this->postJson(apiKeysEndpoint('remove', ['keyId' => 999999]));
+    $response = $this->postJson(apiKeysEndpoint('delete', ['keyId' => 999999]));
 
     $response->assertStatus(404);
 });
