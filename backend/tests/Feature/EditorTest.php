@@ -231,3 +231,39 @@ it('denies a guest (no current user) with a 403', function () {
 
     $response->assertStatus(403);
 });
+
+describe('editor.infoLanding', function () {
+    it('returns the full serialized landing, unlike every other action here NOT gated on being local_file', function () {
+        $landing = LandingFactory::new()->create(['name' => 'external one']); // external by default
+
+        $response = $this->getJson(editorEndpoint('infoLanding', ['id' => $landing->id, 'type' => 'landing']));
+
+        $response->assertStatus(200);
+        $data = $response->json();
+        expect($data['id'])->toBe($landing->id);
+        expect($data['name'])->toBe('external one');
+    });
+
+    it('returns 404 for a non-existent id', function () {
+        $response = $this->getJson(editorEndpoint('infoLanding', ['id' => 999999, 'type' => 'landing']));
+
+        $response->assertStatus(404);
+    });
+
+    it('returns 404 for an unrecognized type', function () {
+        $landing = LandingFactory::new()->create();
+
+        $response = $this->getJson(editorEndpoint('infoLanding', ['id' => $landing->id, 'type' => 'bogus']));
+
+        $response->assertStatus(404);
+    });
+
+    it('denies a guest (no current user) with a 403', function () {
+        $landing = LandingFactory::new()->create();
+        actingAsAdminForEditor(null);
+
+        $response = $this->getJson(editorEndpoint('infoLanding', ['id' => $landing->id, 'type' => 'landing']));
+
+        $response->assertStatus(403);
+    });
+});

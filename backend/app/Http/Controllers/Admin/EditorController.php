@@ -309,6 +309,50 @@ class EditorController extends Controller
     }
 
     /**
+     * Port of legacy `EditorController::infoLandingAction()` — found
+     * missing during this session's exhaustive controller audit (was
+     * simply never ported, 404ing as "action not defined"). Unlike every
+     * other action in this controller, does NOT go through
+     * `resolveEditable()`: legacy's version has no local-file/folder
+     * requirement at all, and additionally checks `isViewAllowed()` on top
+     * of `isEditAllowed()` (both, not either) before returning the full
+     * serialized landing/offer — same base field set as
+     * `LandingsController::showAction()`/`OffersController::showAction()`
+     * (raw attributes + decoded `action_options`, no `group` key — legacy
+     * calls `new LandingSerializer()`/`new OfferSerializer()` with no
+     * extra flag here).
+     */
+    public function infoLandingAction(Request $request): Response
+    {
+        $id = (int) $this->param($request, 'id');
+        $type = $this->param($request, 'type');
+
+        $model = $this->findModel($id, $type);
+        if (! $model) {
+            return $this->notFound();
+        }
+
+        $user = $this->currentUserService->get();
+
+        if (! $this->aclService->isEditAllowed($user, $model)) {
+            return $this->forbidden('You are not allowed to edit this resource');
+        }
+
+        if (! $this->aclService->isViewAllowed($user, $model)) {
+            return $this->forbidden('You are not allowed to view this resource');
+        }
+
+        $model->refresh();
+        $data = $model->getAttributes();
+
+        if (array_key_exists('action_options', $data)) {
+            $data['action_options'] = $this->decodeActionOptions($data['action_options']);
+        }
+
+        return response()->json($data);
+    }
+
+    /**
      * Port of legacy `CreatePreviewImageCommand::enqueue($domain,
      * $systemPath)`'s call sites (`saveFileDataAction`/`removeFileAction`
      * only — legacy does NOT call it from `createFileAction`, confirmed

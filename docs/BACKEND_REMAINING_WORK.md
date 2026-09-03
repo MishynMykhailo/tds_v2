@@ -446,12 +446,17 @@ KClientJsPreset), Macros, Branding, IpInfoDataTypes, Labels.
   (реальный footgun, не полезное поведение).
 - Pretty-URL postback (`docs/PORTING_LOG.md`, отдельная запись) —
   докблок "нет легаси-эквивалента" был неверен, поправлен.
+- `EditorController::infoLandingAction` — портирован. В отличие от всех
+  остальных action'ов этого контроллера, НЕ идёт через
+  `resolveEditable()` (нет требования local_file/folder вообще, легаси
+  этого не проверяет) и требует ОБА `isEditAllowed`+`isViewAllowed` (не
+  один). Возвращает то же базовое поле-множество, что `landings.show`/
+  `offers.show` (raw attributes + декодированный `action_options`, без
+  `group`). 4 новых Pest-теста, живая проверка на реальном MySQL
+  (реальный external-лендинг → 200 с полными данными;
+  несуществующий id/неверный type → 404).
 
 **Осталось (не в этом раунде, следующая сессия):**
-- `EditorController::infoLandingAction` — реальный, используемый легаси
-  action (`application/Component/Editor/Controller/EditorController.php:90`),
-  отсутствует в порте целиком (404 "action not defined" вместо реального
-  бизнес-ответа). Не начато.
 - `AdminApiController` — `adminApi.index` отдаёт JSON-заглушку вместо
   живой Swagger-UI HTML-страницы легаси; `adminApi.spec` отдаёт 200 с
   HTML meta-refresh вместо легасевого настоящего 302-редиректа на
