@@ -1537,6 +1537,114 @@ guest"-тест в проекте не бил по живому легаси б�
 
 ---
 
+## Cleaner — контрактный тест + 2 реальных бага + реальный краш легаси — 2026-09-03
+
+Шестой модуль (запись пропущена в моменте, дописана позже в этой же
+сессии). Живая сверка нашла:
+
+1. `cleanAction()` для отсутствующих `start_date`/`end_date` отдавал
+   406, а реальный легаси-путь здесь — обычный `return [...]` (HTTP
+   200), НЕ `_validateDate()`'s throw (тот реально даёт 406). Тот же
+   {success, error} body, неверный статус-код.
+2. Несуществующий `campaign_id` трактовался как "найден, но нет прав"
+   (403) — реальный `CampaignRepository::find()` кидает `NotFoundError`
+   до `isEditAllowed()`, тот же класс фикса, что для Labels/GeoProfiles/
+   Reports/Editor. Теперь честный 404 с точным легаси-сообщением.
+
+Подтверждён (НЕ воспроизведён) реальный, не зависящий от окружения краш
+легаси: `_schedule($startDate, $endDate = NULL, $timezone = NULL,
+string $campaignId)` объявляет обязательный параметр ПОСЛЕ двух
+опциональных, а admin-без-campaign_id вызывающий код передаёт только 3
+аргумента — "очистить всё" НАВСЕГДА падает 500-кой
+(`ArgumentCountError`) в живом легаси. Стоит явно сказать пользователю
+— это баг в его реальном приложении, не связан с этим dev-окружением.
+
+Новый `tests-contract/tests/CleanerTest.php` (7 тестов) — зелёные на
+ОБОИХ таргетах. `backend/./vendor/bin/pest` — 401/401.
+
+---
+
+## ThirdPartyIntegration / TpiMandatory / CampaignIntegration кластер — 2026-09-03
+
+Седьмой-двенадцатый модуль разом — весь кластер `?object=
+thirdpartyintegration/tpimandatory/codepresets/kclientjspreset/
+facebookintegration/appsflyerintegration` (6 контроллеров), у которого
+не было НИ ОДНОГО внутреннего Pest-теста и НИ ОДНОГО контрактного теста
+до этой сессии. Живая сверка нашла:
+
+**КРУПНАЯ находка (не баг порта, реальный дефект самого легаси, НЕ
+воспроизведён)**: `ThirdPartyIntegrationSerializer::extra()` делает
+`$result = $data["settings"]; $result["id"] = $data["id"];`, предполагая
+`settings` уже массивом — но для строки, реально прочитанной из БД, это
+всё ещё сырая JSON-СТРОКА, и PHP's string-offset-assignment
+(`$string["id"] = ...` кастует `"id"` в индекс `0`) молча затирает
+ПЕРВЫЙ СИМВОЛ строки. Подтверждено: сырое значение в БД —
+`{"integration":"facebook",...}` (валидный JSON), а ответ API для ТОЙ
+ЖЕ записи через find/get/update — `1"integration":"facebook",...}`
+(буквально `{` заменена на `1`, числовой id). Т.е. `thirdpartyintegration
+.find`/`.get`/`.update` в живом легаси реально отдают ИСПОРЧЕННЫЙ JSON
+внутри JSON-конверта — серьёзный, живой, production-затрагивающий баг,
+не артефакт этого dev-окружения (легаси даже логирует `Illegal string
+offset 'id'`-warning на каждый такой вызов). `createAction()`'s
+собственный ответ выглядит корректно только потому, что возвращает
+in-memory модель (settings всё ещё настоящий массив), никогда не
+перечитывая из БД. Порт этим не страдает (Eloquent-каст `settings` в
+массив) — стоит явно сказать пользователю, затрагивает его живое
+приложение.
+
+Реальные баги найдены и исправлены:
+1. `ThirdPartyIntegrationController::updateAction()`/`findAction()`
+   использовали дженерик "Third party integration not found" вместо
+   точного легаси-сообщения `"Component\ThirdPartyIntegration\Model\
+   ThirdPartyIntegration #<id> not found"` — старый докблок ошибочно
+   сравнивал это с DomainsController-кейсом (тот же урок, что уже был
+   с Domains в этой сессии — не доверять докблоку без живой
+   перепроверки).
+2. `deleteAction()` молча no-op'ил на несуществующем id (200/success:
+   true) — реальный `deleteById()` тоже кидает `NotFoundError` первым.
+3. `CampaignsController::resolveGroup()` (backing `listAsOptionsAction`)
+   И `TpiMandatoryController::campaignsAsOptions()` хардкодили
+   `"Default"` для несгруппированной кампании — реальный fallback (тот
+   же `LocaleService::t("groups.default")`) — **"No group"**, другая
+   строка, чем `CampaignSerializer`'s буквальный "Default" (используется
+   в `campaigns.show`/`withStats`) — это НЕ одна и та же константа, как
+   ошибочно предполагалось раньше.
+4. `CodePresetsController`'s `group_translated` отдавал сырой lowercase
+   ключ группы — живая проверка всех 5 реальных групп (banners/frames/
+   links/other/redirects) на `language=en` И `=ru` показала, что реальный
+   "перевод" — просто `ucfirst($group)`, не настоящий i18n — заменено на
+   `ucfirst()`.
+5. `CodePresetsController::showAction()` для неизвестного id отдавал
+   буквальную строку `"null"` (4 байта) — реальный легаси-body
+   ДЕЙСТВИТЕЛЬНО пустой (0 байт) — тот же контракт, что уже
+   зафиксирован для `userPreferences.get`. Ирония: предыдущая версия
+   специально ссылалась на этот же прецедент, но применила его
+   неправильно (JSON `"null"`-строка вместо истинно пустого тела).
+
+Подтверждено (НЕ воспроизведено, уже было верно): `tpimandatory.
+removeCampaign` на несуществующей ассоциации реально КРАШИТ легаси
+(`Uncaught TypeError` — `EntityService::delete(NULL)`) — докблок порта
+заранее предполагал именно такое поведение и сознательно выбрал мягкий
+`success:false` вместо повторения краша; теперь подтверждено живьём,
+что это было верное решение, не догадка.
+
+**Побочная находка и фикс: 3 существующих контрактных теста этой же
+сессии (Cleaner/Reports/ThirdPartyIntegration) использовали
+НЕСУЩЕСТВУЮЩИЙ `campaigns.delete` action для cleanup в `finally`-блоках**
+— у campaigns нет hard-delete action (soft-delete через
+`campaigns.update{state:"deleted"}`, как и у landings). Мёртвый вызов
+тихо проглатывался, ничего не удаляя — это и есть причина, по которой
+~250+ строк "Contract test campaign" накопились как `active` в обеих
+dev-БД за эту сессию. Исправлено в источнике + сделан bulk-cleanup
+(`UPDATE ... SET state='deleted'`) в обеих БД.
+
+Новые `tests-contract/tests/ThirdPartyIntegrationTest.php` (12 тестов) +
+`tests-contract/tests/CampaignIntegrationTest.php` (6 тестов) — зелёные
+на ОБОИХ таргетах. `tests-contract` (без `smoke`) — **157/157 на ОБОИХ
+таргетах**. `backend/./vendor/bin/pest` — 401/401.
+
+---
+
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.
 Завершённая история (traffic-core Фазы 1-17) — в `docs/PORTING_LOG_ARCHIVE.md`,
 туда же архивировать записи старше ~2-3 недель/сессий, когда этот файл
