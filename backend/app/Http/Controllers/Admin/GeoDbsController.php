@@ -345,9 +345,29 @@ class GeoDbsController extends Controller
         return [self::STATUS_OK, ''];
     }
 
+    /**
+     * Resolves a `DB_TYPES` relative `path` to an absolute filesystem path.
+     * Rebased under `storage_path('framework/testing/geoip_root')` instead
+     * of `base_path()` when running under Pest/PHPUnit — the Feature suite
+     * uploads/deletes real files here (`GeoDbsTest.php`'s upload group),
+     * and pointing that at the real project directory tried to delete this
+     * project's actual purchased IP2Location DB3 Lite file on every test
+     * run (it happened twice — see PORTING_LOG.md's GeoDb entry). No env
+     * var needed: this is a deterministic, environment-scoped redirect,
+     * not a configurable path.
+     */
+    private function geoDbAbsolutePath(string $relativePath): string
+    {
+        $root = app()->environment('testing')
+            ? storage_path('framework/testing/geoip_root')
+            : base_path();
+
+        return $root.DIRECTORY_SEPARATOR.$relativePath;
+    }
+
     private function serializeDbType(array $dbType): array
     {
-        $exists = $dbType['path'] !== null && file_exists(base_path($dbType['path']));
+        $exists = $dbType['path'] !== null && file_exists($this->geoDbAbsolutePath($dbType['path']));
 
         $keyValue = $dbType['setting_key'] !== null
             ? Setting::query()->find($dbType['setting_key'])?->value
@@ -372,7 +392,7 @@ class GeoDbsController extends Controller
             // filemtime() of the installed file, formatted per
             // Core\Model\AbstractModel::DATETIME_FORMAT ("Y-m-d H:i:s") —
             // verified against the real legacy source, not guessed.
-            'time' => $exists ? date('Y-m-d H:i:s', filemtime(base_path($dbType['path']))) : null,
+            'time' => $exists ? date('Y-m-d H:i:s', filemtime($this->geoDbAbsolutePath($dbType['path']))) : null,
             'is_recommended' => $dbType['is_recommended'],
             'setting_key' => $dbType['setting_key'],
             'purchase_link' => $dbType['purchase_link'],
@@ -528,7 +548,7 @@ class GeoDbsController extends Controller
             return response()->json(['error' => 'No valid file uploaded (expected multipart field "file").'], 422);
         }
 
-        $destination = base_path($dbType['path']);
+        $destination = $this->geoDbAbsolutePath($dbType['path']);
         $request->file('file')->move(dirname($destination), basename($destination));
 
         return response()->json($this->serializeDbType($dbType));

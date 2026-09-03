@@ -206,14 +206,21 @@ it('returns a 500 for update with an unknown db id', function () {
 |--------------------------------------------------------------------------
 | geoDbs.upload — manual file install (2026-09-03 addition, backlog 3.1)
 |--------------------------------------------------------------------------
-| ip2location_lite's real path (var/geoip/IP2Location/lite/
-| IP2LOCATION-LITE-DB3.BIN) is the SAME path traffic-core's GeoDbResolver
-| reads at runtime by default — the fixture file this test uploads is not
-| a real .BIN, so it's always deleted again after each test to avoid
-| corrupting anything a live traffic-core run might read.
+| GeoDbsController::geoDbAbsolutePath() rebases all geo db file paths under
+| storage/framework/testing/geoip_root when APP_ENV=testing, specifically
+| so this test group's uploads/deletes never touch the real
+| var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN — a real ~48MB
+| purchased file. An earlier version of this test wrote directly to that
+| real path and unconditionally unlinked it in afterEach(), which deleted
+| the project's actual geoip file twice in one session (see PORTING_LOG.md).
 */
+function geoDbsTestFilePath(): string
+{
+    return storage_path('framework/testing/geoip_root/var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN');
+}
+
 afterEach(function () {
-    @unlink(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN'));
+    @unlink(geoDbsTestFilePath());
 });
 
 it('installs an uploaded file for a known db type and flips exists/installed/time to real values', function () {
@@ -230,10 +237,10 @@ it('installs an uploaded file for a known db type and flips exists/installed/tim
     expect($data['exists'])->toBeTrue();
     expect($data['installed'])->toBeTrue();
     expect($data['time'])->not->toBeNull();
-    expect(file_exists(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN')))->toBeTrue();
+    expect(file_exists(geoDbsTestFilePath()))->toBeTrue();
 
     // Real filemtime(), not a fabricated value.
-    $expected = date('Y-m-d H:i:s', filemtime(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN')));
+    $expected = date('Y-m-d H:i:s', filemtime(geoDbsTestFilePath()));
     expect($data['time'])->toBe($expected);
 
     // index also reflects it afterwards.
@@ -250,7 +257,7 @@ it('denies upload to a non-admin user with a 403', function () {
     $response = $this->post(geoDbsEndpoint('upload'), ['id' => 'ip2location_lite', 'file' => $file]);
 
     $response->assertStatus(403);
-    expect(file_exists(base_path('var/geoip/IP2Location/lite/IP2LOCATION-LITE-DB3.BIN')))->toBeFalse();
+    expect(file_exists(geoDbsTestFilePath()))->toBeFalse();
 });
 
 it('rejects upload for an unknown db id with a 422', function () {
