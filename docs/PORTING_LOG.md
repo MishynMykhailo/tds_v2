@@ -1775,4 +1775,38 @@ required", плюс `users.listAsOptions` отсутствует). Следую�
 легаси-источником.
 
 ---
+
+## traffic-core — pretty-URL postback (по запросу пользователя) — 2026-09-03
+
+Новая фича, без легаси-эквивалента (легаси всегда использует
+query-параметр — `?key=SECRET&subid=...` либо голый токен
+`?SECRET&subid=...`, подтверждено чтением `PostbackDispatcher::
+_findKey()`/`NetworkTemplatesRepository::getSecret()`). Пользователь
+попросил вариант вида `/{key}/postback?subid=...&status=...&payout=...`
+— ключ в пути, а не в query.
+
+Добавлено: `PostbackAuthService::findPathKey()` — парсит `/{key}/postback`
+из пути запроса, используется как fallback ПОСЛЕ обоих легаси-
+механизмов (`postback.php`: `findKey() ?? findPathKey()`), не заменяет
+их. traffic-core не имеет собственного роутинга (каждый entry point —
+буквальный файл в `public/`), поэтому реальный запрос с таким путём
+нуждается во внешнем rewrite: `deploy/nginx-traffic-core.conf.example`
+(референс-конфиг для прода, раздел 5 "прод-деплой" всё ещё план, не
+подключено) + `traffic-core/public/router.php` (для локальной
+разработки — единственный entry point в проекте, который специально
+запускается С router-скриптом, `php -S host:port -t public
+public/router.php`; для всех остальных entry-point'ов явный
+router-скрипт НЕ используется — см. "Операционная находка" в записи
+про Phase 7 выше, тот же принцип: `router.php` для НЕраспознанных
+путей возвращает `false`, штатное поведение встроенного PHP-сервера не
+меняется).
+
+Verification: живой прогон в Docker (`tds2-mysql` реальные
+кампания+клик, `postback_key` setting = "6a05078", `router.php`) —
+`GET /6a05078/postback?subid=...&status=sale&payout=50` → 200
+"Success", в БД реально создалась конверсия (`sub_id=..., status=sale,
+revenue=50.0000`); `GET /wrongkey/postback?...` → 403 "Incorrect
+postback code". Фикстуры удалены. `php -l` чисто на всех 3 файлах.
+
+---
 *Обновляется по ходу переноса — дописывать сюда, не заводить новый файл.*

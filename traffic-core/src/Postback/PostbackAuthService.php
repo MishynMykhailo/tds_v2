@@ -12,12 +12,13 @@ use TrafficCore\Db;
  * application/Component/AffiliateNetworks/Repository/
  * NetworkTemplatesRepository.php:59).
  *
- * `_findKey()` ported literally — both mechanisms, in the same priority
- * order as legacy: (1) a `key` query param, (2) a bare/valueless query
- * param used AS the key itself (legacy's `$params[0]` — a query string
- * like `?SECRET&subid=...` where `SECRET` has no `=value`; PHP puts that
- * literal token as an array key with an empty string value, not under a
- * numeric index, so this is read by scanning the raw query string for the
+ * `findKey()` ports `_findKey()` literally — both mechanisms, in the
+ * same priority order as legacy: (1) a `key` query param, (2) a
+ * bare/valueless query param used AS the key itself (legacy's
+ * `$params[0]` — a query string like `?SECRET&subid=...` where `SECRET`
+ * has no `=value`; PHP puts that literal token as an array key with an
+ * empty string value, not under a numeric index, so this is read by
+ * scanning the raw query string for the
  * first key with an empty value rather than literally indexing `[0]`,
  * which would never populate under standard PSR-7 query parsing — see
  * this class's `findKey()` docblock for why).
@@ -66,6 +67,39 @@ class PostbackAuthService
             $candidate = urldecode($pair);
 
             return $candidate !== '' ? $candidate : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * NEW (no legacy equivalent — the two mechanisms `findKey()` already
+     * ports are legacy's real, only ones): pretty-URL key, `/{key}/postback`
+     * — e.g. `https://yourdomain.com/6a05078/postback?subid=...` instead
+     * of `?key=6a05078&subid=...`. Requested by the project owner: a
+     * bare query param leaks the fact that it's a "secret" more than a
+     * URL path segment does, and matches the shape real Keitaro-family
+     * installs are commonly configured with in production (via a
+     * webserver rewrite in front of the app — see `deploy/nginx-traffic-
+     * core.conf.example`).
+     *
+     * traffic-core has no routing layer of its own (every entry point is
+     * a literal file under `public/`) — reaching this method with a
+     * `/{key}/postback` request therefore requires SOMETHING in front to
+     * route it to `public/postback.php` (nginx `rewrite` in production;
+     * `public/router.php` for local dev via `php -S host:port -t public
+     * public/router.php` — see that file). This method itself is
+     * transport-agnostic: it just reads whatever path the incoming
+     * request actually has.
+     */
+    public function findPathKey(\Psr\Http\Message\ServerRequestInterface $request): ?string
+    {
+        $path = $request->getUri()->getPath();
+
+        if (preg_match('#^/([^/]+)/postback/?$#', $path, $matches) === 1) {
+            $key = urldecode($matches[1]);
+
+            return $key !== '' ? $key : null;
         }
 
         return null;

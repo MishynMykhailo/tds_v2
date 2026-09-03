@@ -1,0 +1,42 @@
+# Example nginx server block for traffic-core in production.
+#
+# This is a REFERENCE only — docs/BACKEND_REMAINING_WORK.md section 5
+# ("Продакшн-деплой") is still just a plan, not implemented; this file
+# documents the ONE rewrite rule the pretty-URL postback feature needs
+# (`/{key}/postback` -> `postback.php?key={key}`, see
+# `traffic-core/src/Postback/PostbackAuthService::findPathKey()`'s
+# docblock for why this exists and `traffic-core/public/router.php` for
+# the local-dev equivalent of this exact rule).
+#
+# Every other traffic-core entry point (index.php, gateway.php,
+# preview.php, ktrk.php, ping.php, robots.php, update-tokens.php,
+# click-api.php, postback.php itself via its literal filename) is a
+# real file under public/ and needs no rewrite at all — `try_files`
+# below only ever falls through to PHP for a URI that isn't a real file
+# on disk, which the pretty postback path never is.
+
+server {
+    listen 80;
+    server_name _;
+    root /path/to/traffic-core/public;
+    index index.php;
+
+    # Pretty postback URL: /{key}/postback -> postback.php?key={key},
+    # query string (subid/status/payout/...) preserved via $args.
+    location ~ ^/(?<postback_key>[^/]+)/postback/?$ {
+        rewrite ^ /postback.php?key=$postback_key&$args break;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/postback.php;
+        include fastcgi_params;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}

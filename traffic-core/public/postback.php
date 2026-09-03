@@ -13,9 +13,14 @@
  * `BuildRawClickStage` or any click-pipeline class.
  *
  * Flow (mirrors `PostbackDispatcher::dispatch()`):
- *  1. Find the secret key (`PostbackAuthService::findKey()` — both of
- *     legacy `_findKey()`'s mechanisms, see its docblock) and validate it
- *     against `settings.postback_key` (`PostbackAuthService::isValid()`).
+ *  1. Find the secret key — `PostbackAuthService::findKey()` (the two
+ *     real legacy mechanisms, both query-based) OR, as a fallback,
+ *     `findPathKey()` (NEW, pretty-URL `/{key}/postback` form — no
+ *     legacy equivalent, requested by the project owner; needs a
+ *     webserver rewrite in front to actually reach this file with that
+ *     shape of URL, see `deploy/nginx-traffic-core.conf.example` and
+ *     `public/router.php` for local dev) — then validate it against
+ *     `settings.postback_key` (`PostbackAuthService::isValid()`).
  *     Wrong/missing key -> reject immediately, no processing at all,
  *     matching legacy's own ordering (secret checked before the request
  *     body is even parsed into a `Postback`).
@@ -77,7 +82,10 @@ $params = array_merge($body, $query);
 $returnFormat = isset($query['return']) ? (string) $query['return'] : null;
 
 $authService = new PostbackAuthService();
-$key = $authService->findKey($request);
+// Query-based key first (the two real legacy mechanisms), pretty-URL
+// path key (`/{key}/postback`, see PostbackAuthService::findPathKey()'s
+// docblock — new, no legacy equivalent) as a fallback.
+$key = $authService->findKey($request) ?? $authService->findPathKey($request);
 
 header('Cache-Control: no-cache, no-store, must-revalidate');
 
